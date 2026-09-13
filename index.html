@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QualityUpgr — Improve Photo & Video Quality</title>
+<meta name="description" content="Improve your photos with real, local sharpening and upscaling. Nothing leaves your device.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#faf9f6;
+    --surface:#ffffff;
+    --ink:#15201f;
+    --ink-soft:#5b6664;
+    --line:#dfe3e0;
+    --line-strong:#c3c9c5;
+    --accent:#0f6e63;
+    --accent-deep:#0b524a;
+    --accent-tint:#e5f1ee;
+    --warn:#a83b2c;
+    --warn-tint:#fbeae7;
+    --radius-sm:6px;
+    --radius:12px;
+    --radius-lg:18px;
+    --shadow: 0 1px 2px rgba(21,32,31,0.06);
+    font-size:16px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Inter',system-ui,-apple-system,Segoe UI,sans-serif;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3{
+    font-family:'Fraunces',Georgia,serif;
+    font-weight:500;
+    line-height:1.12;
+    margin:0;
+    letter-spacing:-0.01em;
+  }
+  a{color:inherit;}
+  button{font-family:inherit;}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px;}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+
+  /* ---------- Header ---------- */
+  header.site{padding:22px 0;}
+  .site-header-inner{display:flex;align-items:center;justify-content:space-between;}
+  .wordmark{font-family:'Fraunces',serif;font-size:1.15rem;font-weight:600;letter-spacing:-0.01em;}
+  .wordmark span{color:var(--accent);}
+  nav.site a{font-size:0.9rem;color:var(--ink-soft);text-decoration:none;margin-left:24px;}
+  nav.site a:hover{color:var(--ink);}
+
+  /* ---------- Hero ---------- */
+  .hero{padding:28px 0 8px;}
+  .badge{
+    display:inline-flex;align-items:center;gap:6px;
+    background:var(--accent-tint);color:var(--accent-deep);
+    font-size:0.8rem;font-weight:600;
+    padding:6px 12px;border-radius:99px;
+    margin-bottom:18px;
+  }
+  .hero h1{font-size:clamp(2rem,4.4vw,3rem);max-width:16ch;}
+  .hero p.lede{color:var(--ink-soft);font-size:1.05rem;max-width:46ch;margin:14px 0 0;}
+
+  /* ---------- Mode selector ---------- */
+  .mode-heading{margin:34px 0 12px;font-size:1rem;color:var(--ink-soft);font-family:'Inter';font-weight:600;}
+  .mode-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .mode-card{
+    display:flex;align-items:center;gap:14px;
+    background:var(--surface);
+    border:1.5px solid var(--line);
+    border-radius:var(--radius);
+    padding:18px;
+    cursor:pointer;
+    text-align:left;
+    transition:border-color .15s ease, background .15s ease;
+  }
+  .mode-card:hover{border-color:var(--line-strong);}
+  .mode-card[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-tint);}
+  .mode-icon{
+    width:40px;height:40px;flex:none;border-radius:10px;
+    display:flex;align-items:center;justify-content:center;
+    background:var(--bg);color:var(--ink-soft);
+  }
+  .mode-card[aria-pressed="true"] .mode-icon{background:var(--accent);color:#fff;}
+  .mode-icon svg{width:20px;height:20px;}
+  .mode-title{font-weight:600;font-size:1rem;}
+  .mode-sub{font-size:0.85rem;color:var(--ink-soft);margin-top:2px;}
+  .mode-card[disabled]{opacity:0.55;cursor:not-allowed;}
+
+  .video-note{
+    display:none;margin-top:12px;padding:12px 14px;border-radius:var(--radius-sm);
+    background:#fff8e9;border:1px solid #f0ddb0;color:#6b5309;font-size:0.88rem;
+  }
+  .video-note.show{display:block;}
+
+  /* ---------- Tool card ---------- */
+  .tool{margin-top:22px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-lg);padding:26px;box-shadow:var(--shadow);}
+
+  .upload-zone{
+    border:1.5px dashed var(--line-strong);
+    border-radius:var(--radius);
+    padding:52px 20px;
+    text-align:center;
+    cursor:pointer;
+    background:var(--bg);
+    transition:border-color .15s ease, background .15s ease;
+  }
+  .upload-zone:hover, .upload-zone:focus-visible{border-color:var(--accent);}
+  .upload-zone.drag{border-color:var(--accent);background:var(--accent-tint);}
+  .upload-plus{
+    width:56px;height:56px;border-radius:50%;
+    background:var(--accent);color:#fff;
+    display:flex;align-items:center;justify-content:center;
+    font-size:1.9rem;font-weight:400;margin:0 auto 16px;
+    line-height:1;
+  }
+  .upload-title{font-weight:600;font-size:1.05rem;}
+  .upload-sub{color:var(--ink-soft);font-size:0.88rem;margin-top:6px;}
+  input[type=file]{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;}
+
+  .error-box{
+    display:none;margin-top:14px;padding:12px 14px;border-radius:var(--radius-sm);
+    background:var(--warn-tint);color:var(--warn);font-size:0.9rem;
+  }
+  .error-box.show{display:block;}
+
+  /* ---------- Preview / working area ---------- */
+  .workspace{display:none;}
+  .workspace.show{display:block;}
+  .preview-row{display:grid;grid-template-columns:1.3fr 1fr;gap:24px;align-items:start;}
+  @media (max-width:760px){.preview-row{grid-template-columns:1fr;}}
+
+  .media-frame{
+    border-radius:var(--radius);overflow:hidden;background:#101615;
+    display:flex;align-items:center;justify-content:center;min-height:220px;
+  }
+  .media-frame img, .media-frame video{max-width:100%;display:block;}
+  .meta-line{display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:10px;font-size:0.82rem;color:var(--ink-soft);font-variant-numeric:tabular-nums;}
+
+  .panel h3{font-size:0.95rem;font-weight:600;font-family:'Inter';margin-bottom:14px;}
+  .field{margin-bottom:18px;}
+  .field-label{font-size:0.85rem;font-weight:600;color:var(--ink);margin-bottom:8px;display:block;}
+  .seg{display:flex;border:1px solid var(--line);border-radius:var(--radius-sm);overflow:hidden;}
+  .seg button{
+    flex:1;padding:9px 8px;background:var(--surface);border:none;cursor:pointer;
+    font-size:0.86rem;color:var(--ink-soft);border-right:1px solid var(--line);
+  }
+  .seg button:last-child{border-right:none;}
+  .seg button[aria-pressed="true"]{background:var(--accent);color:#fff;}
+
+  .cta{
+    width:100%;padding:14px 18px;border-radius:var(--radius-sm);border:none;
+    background:var(--accent);color:#fff;font-weight:600;font-size:0.98rem;cursor:pointer;
+    transition:background .15s ease, opacity .15s ease;
+  }
+  .cta:hover:not(:disabled){background:var(--accent-deep);}
+  .cta:disabled{background:#c7cdca;cursor:not-allowed;}
+  .cta.secondary{background:transparent;color:var(--accent-deep);border:1.5px solid var(--line-strong);}
+  .cta.secondary:hover{border-color:var(--accent);}
+
+  .processing{display:none;align-items:center;gap:12px;margin-top:16px;font-size:0.9rem;color:var(--ink-soft);}
+  .processing.show{display:flex;}
+  .spinner{width:18px;height:18px;border-radius:50%;border:2.5px solid var(--line);border-top-color:var(--accent);animation:spin .8s linear infinite;flex:none;}
+  @media (prefers-reduced-motion: reduce){.spinner{animation-duration:1.6s;}}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  /* ---------- Result ---------- */
+  .result{display:none;margin-top:28px;}
+  .result.show{display:block;}
+  .result h2{font-size:1.4rem;margin-bottom:4px;}
+  .result p.sub{color:var(--ink-soft);font-size:0.92rem;margin:0 0 18px;}
+  .compare{
+    position:relative;border-radius:var(--radius);overflow:hidden;
+    background:#101615;user-select:none;touch-action:pan-y;
+  }
+  .compare img{display:block;width:100%;height:auto;}
+  .compare .after-wrap{position:absolute;top:0;left:0;height:100%;overflow:hidden;width:50%;}
+  .compare .after-wrap img{position:absolute;top:0;left:0;height:100%;width:auto;max-width:none;}
+  .compare .base-img{width:100%;}
+  .compare .handle{
+    position:absolute;top:0;bottom:0;left:50%;width:0;
+    display:flex;align-items:center;justify-content:center;
+    cursor:ew-resize;
+  }
+  .handle-line{position:absolute;top:0;bottom:0;left:0;width:2px;background:#fff;transform:translateX(-1px);}
+  .handle-grip{
+    width:36px;height:36px;border-radius:50%;background:#fff;
+    display:flex;align-items:center;justify-content:center;
+    box-shadow:0 2px 8px rgba(0,0,0,0.35);color:var(--ink);font-size:0.75rem;
+  }
+  .tag{position:absolute;top:12px;padding:4px 10px;border-radius:99px;background:rgba(16,22,21,0.65);color:#fff;font-size:0.72rem;font-weight:600;letter-spacing:0.02em;}
+  .tag.tag-before{left:12px;}
+  .tag.tag-after{right:12px;}
+
+  .result-actions{display:flex;gap:12px;margin-top:20px;flex-wrap:wrap;}
+  .result-actions .cta{width:auto;flex:1;min-width:180px;}
+
+  /* ---------- Sections ---------- */
+  section.info{padding:64px 0;border-top:1px solid var(--line);}
+  section.info h2{font-size:1.6rem;margin-bottom:28px;}
+  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;}
+  @media (max-width:760px){.steps{grid-template-columns:1fr 1fr;}}
+  .step-num{font-family:'Fraunces',serif;font-size:1.6rem;color:var(--accent);margin-bottom:8px;}
+  .step-title{font-weight:600;margin-bottom:4px;}
+  .step-desc{font-size:0.88rem;color:var(--ink-soft);}
+
+  .fact-list{display:grid;grid-template-columns:1fr 1fr;gap:10px 32px;font-size:0.92rem;}
+  @media (max-width:600px){.fact-list{grid-template-columns:1fr;}}
+  .fact-list li{padding:10px 0;border-bottom:1px solid var(--line);list-style:none;display:flex;justify-content:space-between;gap:16px;color:var(--ink-soft);}
+  .fact-list li b{color:var(--ink);font-weight:600;}
+
+  .prose p{max-width:64ch;color:var(--ink-soft);font-size:0.98rem;margin:0 0 14px;}
+  .prose p:last-child{margin-bottom:0;}
+
+  footer.site{border-top:1px solid var(--line);padding:28px 0;font-size:0.84rem;color:var(--ink-soft);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;}
+
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;}
+</style>
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap site-header-inner">
+    <div class="wordmark">Quality<span>Upgr</span></div>
+    <nav class="site">
+      <a href="#how-it-works">How it works</a>
+      <a href="#privacy">Privacy</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+    <section class="hero">
+      <span class="badge">Photo &amp; video enhancement</span>
+      <h1>Make your photos look sharper — right on your device.</h1>
+      <p class="lede">Upload a photo, sharpen and upscale it with real local processing, and compare the result before you download it. Nothing is uploaded anywhere.</p>
+
+      <div class="mode-heading">What do you want to improve?</div>
+      <div class="mode-grid" role="group" aria-label="Choose media type">
+        <button type="button" class="mode-card" id="mode-photo" aria-pressed="true">
+          <span class="mode-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="11" r="2" stroke="currentColor" stroke-width="1.6"/><path d="M21 16l-5.5-4.5a1.5 1.5 0 00-1.9.05L4 19" stroke="currentColor" stroke-width="1.6"/></svg>
+          </span>
+          <span>
+            <span class="mode-title">Photo</span>
+            <span class="mode-sub">Improve an image</span>
+          </span>
+        </button>
+        <button type="button" class="mode-card" id="mode-video" aria-pressed="false">
+          <span class="mode-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="6" width="13" height="12" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M16 10.5l5-3v9l-5-3" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+          </span>
+          <span>
+            <span class="mode-title">Video</span>
+            <span class="mode-sub">Improve a video</span>
+          </span>
+        </button>
+      </div>
+      <div class="video-note" id="video-note">
+        Video enhancement is still in development — real local video processing needs more testing before it ships. Photo enhancement is fully working today.
+      </div>
+    </section>
+
+    <section class="tool" id="tool" aria-live="polite">
+
+      <!-- Upload -->
+      <div id="upload-stage">
+        <div class="upload-zone" id="upload-zone" tabindex="0" role="button" aria-label="Add a photo">
+          <div class="upload-plus" aria-hidden="true">+</div>
+          <div class="upload-title" id="upload-title">Add a photo</div>
+          <div class="upload-sub">Click to browse or drag &amp; drop · JPG, PNG or WEBP · up to 20 MB</div>
+        </div>
+        <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp">
+        <div class="error-box" id="error-box" role="alert"></div>
+      </div>
+
+      <!-- Workspace: preview + settings -->
+      <div class="workspace" id="workspace">
+        <div class="preview-row">
+          <div>
+            <div class="media-frame"><img id="preview-img" alt="Your uploaded photo"></div>
+            <div class="meta-line" id="meta-line"></div>
+          </div>
+          <div class="panel">
+            <h3>Enhancement settings</h3>
+            <div class="field">
+              <span class="field-label">Enhancement</span>
+              <div class="seg" role="group" aria-label="Enhancement strength">
+                <button type="button" data-enh="standard" aria-pressed="true">Standard</button>
+                <button type="button" data-enh="strong" aria-pressed="false">Strong</button>
+              </div>
+            </div>
+            <div class="field">
+              <span class="field-label">Upscale</span>
+              <div class="seg" role="group" aria-label="Upscale factor">
+                <button type="button" data-scale="1" aria-pressed="true">Original</button>
+                <button type="button" data-scale="2" aria-pressed="false">2×</button>
+              </div>
+            </div>
+            <button class="cta" id="improve-btn">Improve quality</button>
+            <div class="processing" id="processing-row">
+              <span class="spinner" aria-hidden="true"></span>
+              <span id="processing-label">Processing on your device…</span>
+            </div>
+            <div style="margin-top:14px;">
+              <button class="cta secondary" id="change-file-btn" type="button">Choose a different photo</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Result -->
+      <div class="result" id="result">
+        <h2>Your improved result is ready.</h2>
+        <p class="sub" id="result-sub">Drag the slider to compare the original and the improved version.</p>
+        <div class="compare" id="compare">
+          <img class="base-img" id="compare-before" alt="Original photo">
+          <div class="after-wrap" id="after-wrap">
+            <img id="compare-after" alt="Improved photo">
+          </div>
+          <span class="tag tag-before">Original</span>
+          <span class="tag tag-after">Improved</span>
+          <div class="handle" id="handle">
+            <div class="handle-line"></div>
+            <div class="handle-grip" aria-hidden="true">⟺</div>
+          </div>
+        </div>
+        <div class="result-actions">
+          <button class="cta" id="download-btn">Download</button>
+          <button class="cta secondary" id="another-btn">Improve another file</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="info" id="how-it-works">
+      <h2>How it works</h2>
+      <div class="steps">
+        <div><div class="step-num">1</div><div class="step-title">Choose</div><div class="step-desc">Pick Photo (Video is on the way).</div></div>
+        <div><div class="step-num">2</div><div class="step-title">Upload</div><div class="step-desc">Add your file — it never leaves your device.</div></div>
+        <div><div class="step-num">3</div><div class="step-title">Improve</div><div class="step-desc">Sharpen, boost contrast, and optionally upscale.</div></div>
+        <div><div class="step-num">4</div><div class="step-title">Download</div><div class="step-desc">Save the result, compare it any time.</div></div>
+      </div>
+    </section>
+
+    <section class="info" id="formats">
+      <h2>Supported formats and limits</h2>
+      <ul class="fact-list">
+        <li>Input formats <b>JPG, PNG, WEBP</b></li>
+        <li>Output format <b>Same as input</b></li>
+        <li>Max file size <b>20 MB</b></li>
+        <li>Max upscale <b>2×</b></li>
+        <li>Longest side supported <b>Up to 4000 px</b></li>
+        <li>Processing location <b>Your browser, on-device</b></li>
+      </ul>
+      <p class="prose" style="margin-top:20px;">
+        Enhancement uses classic sharpening (unsharp masking) plus contrast and saturation adjustment, then real browser-native resampling for upscaling. It isn't an AI model reconstructing missing detail — it's making the detail that's already in your photo more visible. 4× upscaling isn't offered yet because the result didn't hold up to a real quality bar.
+      </p>
+    </section>
+
+    <section class="info" id="privacy">
+      <h2>Your files stay under your control.</h2>
+      <div class="prose">
+        <p>Photos you enhance with QualityUpgr are processed directly in your browser, on your own device. They are not uploaded to a QualityUpgr server for this local processing to happen, and this page makes no network request containing your image.</p>
+        <p>Closing or reloading the tab clears everything — nothing is kept after your session.</p>
+      </div>
+    </section>
+
+    <section class="info" id="about">
+      <h2>We're building QualityUpgr.</h2>
+      <div class="prose">
+        <p>QualityUpgr is a new, independent project focused on making photo and video enhancement simple, honest, and accessible. Today it does one thing well: real, local photo sharpening and upscaling.</p>
+        <p>We're starting small and improving it step by step — video enhancement is next.</p>
+      </div>
+    </section>
+  </div>
+
+  <footer class="site">
+    <div class="wrap" style="display:flex;justify-content:space-between;width:100%;flex-wrap:wrap;gap:10px;">
+      <span>© 2026 QualityUpgr</span>
+      <span>Built for photos today. Video is on the way.</span>
+    </div>
+  </footer>
+</main>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- State ----------
+  let currentMode = "photo";
+  let originalFile = null;
+  let originalImg = null;      // HTMLImageElement, decoded
+  let originalDataUrl = null;
+  let resultDataUrl = null;
+  let resultBytes = 0;
+  let enhancement = "standard"; // standard | strong
+  let scaleFactor = 1;          // 1 | 2
+
+  const MAX_BYTES = 20 * 1024 * 1024;
+  const MAX_DIM = 4000;
+  const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+  // ---------- Elements ----------
+  const modePhoto = document.getElementById('mode-photo');
+  const modeVideo = document.getElementById('mode-video');
+  const videoNote = document.getElementById('video-note');
+  const uploadZone = document.getElementById('upload-zone');
+  const uploadTitle = document.getElementById('upload-title');
+  const fileInput = document.getElementById('file-input');
+  const errorBox = document.getElementById('error-box');
+  const uploadStage = document.getElementById('upload-stage');
+  const workspace = document.getElementById('workspace');
+  const previewImg = document.getElementById('preview-img');
+  const metaLine = document.getElementById('meta-line');
+  const improveBtn = document.getElementById('improve-btn');
+  const processingRow = document.getElementById('processing-row');
+  const processingLabel = document.getElementById('processing-label');
+  const changeFileBtn = document.getElementById('change-file-btn');
+  const resultSection = document.getElementById('result');
+  const compareBefore = document.getElementById('compare-before');
+  const compareAfter = document.getElementById('compare-after');
+  const afterWrap = document.getElementById('after-wrap');
+  const handle = document.getElementById('handle');
+  const downloadBtn = document.getElementById('download-btn');
+  const anotherBtn = document.getElementById('another-btn');
+
+  // ---------- Mode switching ----------
+  function setMode(mode){
+    currentMode = mode;
+    modePhoto.setAttribute('aria-pressed', mode === 'photo');
+    modeVideo.setAttribute('aria-pressed', mode === 'video');
+    videoNote.classList.toggle('show', mode === 'video');
+    uploadStage.style.display = mode === 'video' ? 'none' : '';
+    workspace.classList.remove('show');
+    resultSection.classList.remove('show');
+    if(mode === 'photo'){ resetToUpload(); }
+  }
+  modePhoto.addEventListener('click', () => setMode('photo'));
+  modeVideo.addEventListener('click', () => setMode('video'));
+
+  // ---------- Upload interactions ----------
+  uploadZone.addEventListener('click', () => fileInput.click());
+  uploadZone.addEventListener('keydown', (e) => {
+    if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); fileInput.click(); }
+  });
+  uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('drag'); });
+  uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag'));
+  uploadZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadZone.classList.remove('drag');
+    if(e.dataTransfer.files && e.dataTransfer.files[0]){
+      handleFile(e.dataTransfer.files[0]);
+    }
+  });
+  fileInput.addEventListener('change', () => {
+    if(fileInput.files[0]) handleFile(fileInput.files[0]);
+  });
+
+  function showError(msg){
+    errorBox.textContent = msg;
+    errorBox.classList.add('show');
+  }
+  function clearError(){
+    errorBox.classList.remove('show');
+    errorBox.textContent = '';
+  }
+
+  function handleFile(file){
+    clearError();
+    if(!ACCEPTED_TYPES.includes(file.type)){
+      showError("This file type isn't supported yet. Please use a JPG, PNG, or WEBP photo.");
+      return;
+    }
+    if(file.size > MAX_BYTES){
+      showError("This file is too large to process reliably on this device. Please use a photo under 20 MB.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onerror = () => {
+      showError("We couldn't read this image. Please try another file.");
+    };
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      const img = new Image();
+      img.onload = () => {
+        if(img.naturalWidth > MAX_DIM || img.naturalHeight > MAX_DIM){
+          showError("This photo's dimensions are too large for this device. Please use an image with sides under " + MAX_DIM + "px.");
+          return;
+        }
+        originalFile = file;
+        originalImg = img;
+        originalDataUrl = dataUrl;
+        openWorkspace(file, img);
+      };
+      img.onerror = () => {
+        showError("We couldn't read this image. Please try another file.");
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function formatBytes(bytes){
+    if(bytes < 1024) return bytes + ' B';
+    if(bytes < 1024*1024) return (bytes/1024).toFixed(0) + ' KB';
+    return (bytes/(1024*1024)).toFixed(1) + ' MB';
+  }
+
+  function openWorkspace(file, img){
+    previewImg.src = originalDataUrl;
+    const fmt = file.type.replace('image/','').toUpperCase();
+    metaLine.innerHTML =
+      '<span>' + img.naturalWidth + ' × ' + img.naturalHeight + ' px</span>' +
+      '<span>' + formatBytes(file.size) + '</span>' +
+      '<span>' + fmt + '</span>';
+    uploadStage.style.display = 'none';
+    workspace.classList.add('show');
+    resultSection.classList.remove('show');
+  }
+
+  changeFileBtn.addEventListener('click', resetToUpload);
+
+  function resetToUpload(){
+    originalDataUrl = null;
+    resultDataUrl = null;
+    originalFile = null; originalImg = null; resultBytes = 0;
+    fileInput.value = '';
+    workspace.classList.remove('show');
+    resultSection.classList.remove('show');
+    uploadStage.style.display = '';
+    clearError();
+  }
+
+  // ---------- Settings ----------
+  document.querySelectorAll('[data-enh]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-enh]').forEach(b => b.setAttribute('aria-pressed', 'false'));
+      btn.setAttribute('aria-pressed', 'true');
+      enhancement = btn.getAttribute('data-enh');
+    });
+  });
+  document.querySelectorAll('[data-scale]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-scale]').forEach(b => b.setAttribute('aria-pressed', 'false'));
+      btn.setAttribute('aria-pressed', 'true');
+      scaleFactor = parseInt(btn.getAttribute('data-scale'), 10);
+    });
+  });
+
+  // ---------- Real image processing ----------
+  // Box blur approximating a gaussian, run 3x per pass for a smooth result.
+  function boxBlur1D(src, dst, w, h, r, horizontal){
+    const channels = 4;
+    if(horizontal){
+      for(let y = 0; y < h; y++){
+        let rowStart = y * w * channels;
+        for(let x = 0; x < w; x++){
+          let rSum=0,gSum=0,bSum=0,count=0;
+          for(let k = -r; k <= r; k++){
+            let xx = x + k;
+            if(xx < 0) xx = 0; else if(xx >= w) xx = w-1;
+            const idx = rowStart + xx*channels;
+            rSum += src[idx]; gSum += src[idx+1]; bSum += src[idx+2]; count++;
+          }
+          const outIdx = rowStart + x*channels;
+          dst[outIdx] = rSum/count; dst[outIdx+1] = gSum/count; dst[outIdx+2] = bSum/count;
+          dst[outIdx+3] = src[outIdx+3];
+        }
+      }
+    } else {
+      for(let x = 0; x < w; x++){
+        for(let y = 0; y < h; y++){
+          let rSum=0,gSum=0,bSum=0,count=0;
+          for(let k = -r; k <= r; k++){
+            let yy = y + k;
+            if(yy < 0) yy = 0; else if(yy >= h) yy = h-1;
+            const idx = (yy*w + x)*channels;
+            rSum += src[idx]; gSum += src[idx+1]; bSum += src[idx+2]; count++;
+          }
+          const outIdx = (y*w + x)*channels;
+          dst[outIdx] = rSum/count; dst[outIdx+1] = gSum/count; dst[outIdx+2] = bSum/count;
+          dst[outIdx+3] = src[outIdx+3];
+        }
+      }
+    }
+  }
+
+  function approxGaussianBlur(data, w, h, radius){
+    let a = Float32Array.from(data);
+    let b = new Float32Array(data.length);
+    for(let pass = 0; pass < 3; pass++){
+      boxBlur1D(a, b, w, h, radius, true);
+      boxBlur1D(b, a, w, h, radius, false);
+    }
+    return a;
+  }
+
+  function clamp255(v){ return v < 0 ? 0 : (v > 255 ? 255 : v); }
+
+  function enhanceImageData(imageData, mode){
+    const { data, width, height } = imageData;
+    const amount = mode === 'strong' ? 1.35 : 0.65;
+    const contrast = mode === 'strong' ? 1.14 : 1.05;
+    const saturation = mode === 'strong' ? 1.22 : 1.08;
+    const radius = Math.max(1, Math.round(Math.min(width, height) / 400));
+
+    const blurred = approxGaussianBlur(data, width, height, radius);
+
+    for(let i = 0; i < data.length; i += 4){
+      for(let c = 0; c < 3; c++){
+        const orig = data[i+c];
+        const blur = blurred[i+c];
+        let v = orig + amount * (orig - blur);
+        v = (v - 128) * contrast + 128;
+        data[i+c] = clamp255(v);
+      }
+      const r = data[i], g = data[i+1], b = data[i+2];
+      const gray = 0.299*r + 0.587*g + 0.114*b;
+      data[i]   = clamp255(gray + saturation * (r - gray));
+      data[i+1] = clamp255(gray + saturation * (g - gray));
+      data[i+2] = clamp255(gray + saturation * (b - gray));
+    }
+    return imageData;
+  }
+
+  function processImage(img, mode, scale){
+    return new Promise((resolve) => {
+      // yield to the browser so the "processing" UI actually paints before heavy work
+      setTimeout(() => {
+        const outW = Math.round(img.naturalWidth * scale);
+        const outH = Math.round(img.naturalHeight * scale);
+        const canvas = document.createElement('canvas');
+        canvas.width = outW; canvas.height = outH;
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, outW, outH);
+
+        const imageData = ctx.getImageData(0, 0, outW, outH);
+        enhanceImageData(imageData, mode);
+        ctx.putImageData(imageData, 0, 0);
+
+        const dataUrl = canvas.toDataURL(originalFile.type, 0.94);
+        const base64Length = dataUrl.length - (dataUrl.indexOf(',') + 1);
+        const approxBytes = Math.round(base64Length * 0.75);
+        resolve({ dataUrl, bytes: approxBytes, width: outW, height: outH });
+      }, 30);
+    });
+  }
+
+  improveBtn.addEventListener('click', async () => {
+    if(!originalImg || !originalFile) return;
+    improveBtn.disabled = true;
+    processingRow.classList.add('show');
+    processingLabel.textContent = 'Processing on your device…';
+    clearError();
+
+    try{
+      const out = await processImage(originalImg, enhancement, scaleFactor);
+      resultDataUrl = out.dataUrl;
+      resultBytes = out.bytes;
+
+      compareBefore.src = originalDataUrl;
+      compareAfter.src = resultDataUrl;
+      document.getElementById('result-sub').textContent =
+        'Drag the slider to compare. Output: ' + out.width + ' × ' + out.height + ' px, ' + formatBytes(resultBytes) + '.';
+      resultSection.classList.add('show');
+      resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      resetSlider();
+    } catch(err){
+      showError("We couldn't finish processing this file. Your original file has not been changed. Please try another photo.");
+    } finally {
+      improveBtn.disabled = false;
+      processingRow.classList.remove('show');
+    }
+  });
+
+  // ---------- Before / after slider ----------
+  function setSliderPct(pct){
+    pct = Math.max(0, Math.min(100, pct));
+    afterWrap.style.width = pct + '%';
+    handle.style.left = pct + '%';
+  }
+  function resetSlider(){ setSliderPct(50); }
+
+  let dragging = false;
+  function pctFromEvent(e){
+    const rect = document.getElementById('compare').getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    return (x / rect.width) * 100;
+  }
+  handle.addEventListener('mousedown', () => dragging = true);
+  handle.addEventListener('touchstart', () => dragging = true, {passive:true});
+  window.addEventListener('mouseup', () => dragging = false);
+  window.addEventListener('touchend', () => dragging = false);
+  window.addEventListener('mousemove', (e) => { if(dragging) setSliderPct(pctFromEvent(e)); });
+  window.addEventListener('touchmove', (e) => { if(dragging) setSliderPct(pctFromEvent(e)); }, {passive:true});
+  document.getElementById('compare').addEventListener('click', (e) => {
+    if(e.target === handle || handle.contains(e.target)) return;
+    setSliderPct(pctFromEvent(e));
+  });
+  handle.setAttribute('tabindex', '0');
+  handle.setAttribute('role', 'slider');
+  handle.setAttribute('aria-label', 'Comparison slider');
+  handle.setAttribute('aria-valuemin', '0');
+  handle.setAttribute('aria-valuemax', '100');
+  handle.addEventListener('keydown', (e) => {
+    const current = parseFloat(afterWrap.style.width) || 50;
+    if(e.key === 'ArrowLeft'){ setSliderPct(current - 5); e.preventDefault(); }
+    if(e.key === 'ArrowRight'){ setSliderPct(current + 5); e.preventDefault(); }
+  });
+
+  // ---------- Download / reset ----------
+  downloadBtn.addEventListener('click', () => {
+    if(!resultDataUrl || !originalFile) return;
+    const ext = originalFile.type === 'image/png' ? 'png' : (originalFile.type === 'image/webp' ? 'webp' : 'jpg');
+    const baseName = originalFile.name.replace(/\.[^.]+$/, '');
+    const a = document.createElement('a');
+    a.href = resultDataUrl;
+    a.download = baseName + '-qualityupgr.' + ext;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
+
+  anotherBtn.addEventListener('click', () => {
+    resultSection.classList.remove('show');
+    resetToUpload();
+    document.getElementById('tool').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+})();
+</script>
+</body>
+</html>
