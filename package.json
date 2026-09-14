@@ -1,0 +1,9 @@
+{
+  "name": "qualityupgr",
+  "private": true,
+  "version": "1.0.0",
+  "description": "QualityUpgr — static frontend plus Vercel serverless API for the Early Access waitlist.",
+  "engines": {
+    "node": ">=18"
+  }
+}
