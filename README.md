@@ -2,7 +2,11 @@
 
 A simple, honest tool for improving the quality of photos — right in your browser.
 
-**Live product logic:** everything runs client-side in `index.html`. No backend, no uploads, no accounts (yet).
+**Live product logic:** photo/video enhancement runs entirely client-side in `index.html`. No uploads, no accounts (yet). The only server-side piece is a small Early Access waitlist API (see below) — your photos never touch it.
+
+## Early Access (pricing, no real payments yet)
+
+The site shows real pricing (Creator $7.99/mo, Pro $14.99/mo) with a **Join Early Access** flow instead of a checkout — no payment is taken. See `api/early-access.js` and `.env.example` for the backend and required environment variables.
 
 ## What it actually does today
 
