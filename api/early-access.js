@@ -49,30 +49,36 @@ export default async function handler(req, res) {
     }
 
     const emailKey =
-      `qualityupgr:early_access:email:${encodeURIComponent(normalizedEmail)}`;
+      `qualityupgr:early_access:email:${normalizedEmail}`;
 
-    // Try to create a unique record.
-    // NX means: only create it if it doesn't already exist.
+    const timestamp = new Date().toISOString();
+
+    // Save email only if it does not already exist
     const saveResponse = await fetch(redisUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${redisToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        command: ["SET", emailKey, new Date().toISOString(), "NX"],
-      }),
+      body: JSON.stringify([
+        "SET",
+        emailKey,
+        timestamp,
+        "NX",
+      ]),
     });
-
-    if (!saveResponse.ok) {
-      throw new Error(
-        `Upstash returned HTTP ${saveResponse.status}`
-      );
-    }
 
     const saveResult = await saveResponse.json();
 
-    // Email already exists
+    if (!saveResponse.ok) {
+      console.error("Redis SET error:", saveResult);
+
+      throw new Error(
+        saveResult.error || `Redis returned HTTP ${saveResponse.status}`
+      );
+    }
+
+    // Already registered
     if (saveResult.result === null) {
       return res.status(200).json({
         success: true,
@@ -82,24 +88,26 @@ export default async function handler(req, res) {
     }
 
     // Add email to the main set
-    const addToListResponse = await fetch(redisUrl, {
+    const listResponse = await fetch(redisUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${redisToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        command: [
-          "SADD",
-          "qualityupgr:early_access:emails",
-          normalizedEmail,
-        ],
-      }),
+      body: JSON.stringify([
+        "SADD",
+        "qualityupgr:early_access:emails",
+        normalizedEmail,
+      ]),
     });
 
-    if (!addToListResponse.ok) {
+    const listResult = await listResponse.json();
+
+    if (!listResponse.ok) {
+      console.error("Redis SADD error:", listResult);
+
       throw new Error(
-        `Upstash SADD returned HTTP ${addToListResponse.status}`
+        listResult.error || `Redis returned HTTP ${listResponse.status}`
       );
     }
 
@@ -108,6 +116,7 @@ export default async function handler(req, res) {
       alreadyRegistered: false,
       message: "You have been added to the early access list.",
     });
+
   } catch (error) {
     console.error("Early access error:", error);
 
