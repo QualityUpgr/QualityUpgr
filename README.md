@@ -7,6 +7,10 @@ anywhere to be enhanced.
 `index.html`. The only server-side piece is a small Early Access waitlist API
 (see below) — your photos never touch it.
 
+## Brand
+
+QualityUpgr uses a custom inline SVG brand mark in `index.html`. The same mark is also used as the browser favicon, so the visual identity stays consistent without adding image assets or build dependencies.
+
 ## What it does today
 
 - **Measures the photo first.** Before anything is changed, the image is
