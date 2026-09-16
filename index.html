@@ -200,6 +200,10 @@
     font-size:0.86rem;color:var(--ink-soft);border-right:1px solid var(--line);
   }
   .seg button:last-child{border-right:none;}
+  .seg button[disabled]{opacity:0.4;cursor:not-allowed;}
+  .field-hint{margin:8px 0 0;font-size:0.78rem;line-height:1.5;color:var(--ink-soft);}
+  .result-detail{margin:14px auto 0;max-width:620px;font-size:0.85rem;line-height:1.6;color:var(--ink-soft);}
+  #processing-pct{margin-left:auto;font-variant-numeric:tabular-nums;color:var(--ink);}
   .seg button[aria-pressed="true"]{background:var(--accent);color:#fff;}
 
   .cta{
@@ -430,9 +434,11 @@
             <div class="field">
               <span class="field-label">Enhancement</span>
               <div class="seg" role="group" aria-label="Enhancement strength">
-                <button type="button" data-enh="standard" aria-pressed="true">Standard</button>
-                <button type="button" data-enh="strong" aria-pressed="false">Strong</button>
+                <button type="button" data-enh="natural" aria-pressed="false">Natural</button>
+                <button type="button" data-enh="balanced" aria-pressed="true">Balanced</button>
+                <button type="button" data-enh="detail" aria-pressed="false">Detail</button>
               </div>
+              <p class="field-hint">Natural keeps post-processing to a minimum. Balanced adds moderate, halo-limited sharpening. Detail pushes fine texture harder within the same safety limits.</p>
             </div>
             <div class="field">
               <span class="field-label">Upscale</span>
@@ -445,7 +451,8 @@
             <button class="cta" id="improve-btn">Improve quality</button>
             <div class="processing" id="processing-row">
               <span class="spinner" aria-hidden="true"></span>
-              <span id="processing-label">Processing on your device…</span>
+              <span id="processing-label">Enhancing image…</span>
+              <span id="processing-pct" aria-live="polite">0%</span>
             </div>
             <div style="margin-top:14px;">
               <button class="cta secondary" id="change-file-btn" type="button">Choose a different photo</button>
@@ -471,6 +478,7 @@
             <div class="handle-grip" aria-hidden="true">⟺</div>
           </div>
         </div>
+        <p class="result-detail" id="result-detail"></p>
         <div class="result-actions">
           <button class="cta" id="download-btn">Download</button>
           <button class="cta secondary" id="another-btn">Improve another file</button>
@@ -483,7 +491,7 @@
       <div class="steps reveal-stagger">
         <div class="step-card"><div class="step-num">1</div><div class="step-title">Choose</div><div class="step-desc">Pick Photo (Video is on the way).</div></div>
         <div class="step-card"><div class="step-num">2</div><div class="step-title">Upload</div><div class="step-desc">Add your file — it never leaves your device.</div></div>
-        <div class="step-card"><div class="step-num">3</div><div class="step-title">Improve</div><div class="step-desc">Sharpen, boost contrast, and optionally upscale.</div></div>
+        <div class="step-card"><div class="step-num">3</div><div class="step-title">Improve</div><div class="step-desc">Measure the photo, then enhance and upscale it by however much it actually needs.</div></div>
         <div class="step-card"><div class="step-num">4</div><div class="step-title">Download</div><div class="step-desc">Save the result, compare it any time.</div></div>
       </div>
     </section>
@@ -496,11 +504,13 @@
         <li>Max file size <b>20 MB</b></li>
         <li>Max upscale <b>4× (AI, device-dependent)</b></li>
         <li>Longest side supported <b>Up to 4000 px</b></li>
-        <li>Max output size <b>~35 MP (e.g. 7680 × 4320)</b></li>
+        <li>Max output size <b>~32 MP desktop, ~16 MP on iPhone/iPad</b></li>
         <li>Processing location <b>Your browser, on-device</b></li>
       </ul>
       <p class="prose reveal" style="margin-top:20px;">
-        When you choose 2× or 4×, QualityUpgr tries to run a real local AI super-resolution model (a small ESRGAN-family network, via TensorFlow.js) directly in your browser — it reconstructs plausible detail rather than just stretching pixels. It first tries your GPU (WebGL); if that isn't available it falls back to a slower CPU pass; if AI can't run at all on your device, it falls back to real browser-native resampling plus unsharp-mask sharpening instead — never a silent trick. Whichever engine actually ran is always labeled honestly under your result. At 1× nothing is resized — you just get sharpening and contrast/detail adjustment on the original dimensions.
+        When you choose 2× or 4×, QualityUpgr tries to run a real local AI super-resolution model (ESRGAN-Slim, via TensorFlow.js) directly in your browser — it reconstructs plausible detail rather than just stretching pixels. Only the model for the factor you picked is downloaded. It first tries your GPU (WebGL); without one it falls back to a slower CPU pass, and skips AI entirely on large images where a CPU pass would take minutes; if AI can't run at all, you get high-quality stepped resampling instead — never a silent trick. Whichever engine actually ran is labeled under your result.
+        <br><br>
+        Either way, the photo is measured first — sharpness, noise, contrast and compression artefacts — and the amount of sharpening is chosen from those measurements. A photo that's already sharp gets almost none. Sharpening only touches brightness, never colour, and is limited so it can't ring or halo around edges. Before the result is shown, it's checked against the original for brightness, colour and clipping; if anything drifted, the pipeline pulls back rather than handing you a damaged image. At 1× nothing is resized — you get that same adaptive enhancement at the original dimensions.
       </p>
     </section>
 
@@ -604,60 +614,681 @@
   let currentMode = "photo";
   let originalFile = null;
   let originalImg = null;      // HTMLImageElement, decoded
-  let originalDataUrl = null;
-  let resultDataUrl = null;
-  let resultBytes = 0;
-  let enhancement = "standard"; // standard | strong
+  let originalUrl = null;      // object URL for the source file
+  let resultUrl = null;        // object URL for the processed result
+  let resultBlob = null;
+  let enhancement = "balanced"; // natural | balanced | detail
   let scaleFactor = 1;          // 1 | 2 | 4
 
   const MAX_BYTES = 20 * 1024 * 1024;
   const MAX_DIM = 4000;
   const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
-  // Hard ceiling on the assembled OUTPUT canvas, independent of engine.
-  // ~35 megapixels covers the 7680x4320 (8K) test case with headroom while
-  // keeping the final RGBA buffer (~140MB at that size) within what typical
-  // desktop browser tabs can hold without crashing. Mobile devices may still
-  // fail earlier than this even when the check passes — that's a real limit
-  // of running everything on-device rather than on a server.
-  const MAX_OUTPUT_PIXELS = 35 * 1000 * 1000;
+  // AI super-resolution on the plain-JS CPU backend is roughly two orders of
+  // magnitude slower than on the GPU. Above this input size it would leave
+  // the tab unresponsive for minutes, so the non-AI upscaler is used instead
+  // and the result is labelled for what it is.
+  const CPU_AI_MAX_PIXELS = 1200 * 1000;
 
-  // ---------- Local AI super-resolution engine (lazy-loaded) ----------
-  // Real-ESRGAN's original PyTorch weights aren't practical to run in a
-  // browser tab (large model, no official browser-ready export with a clear
-  // commercial-use license). Instead this uses UpscalerJS's ESRGAN-Slim
-  // models: MIT-licensed, pre-converted to TensorFlow.js, small enough to
-  // fetch on demand, and shipped with built-in tiled inference so memory use
-  // stays bounded on large images. See the chat response for the full
-  // model/license writeup.
+  // Hard ceiling on the assembled OUTPUT canvas. The binding constraint is
+  // the browser's own canvas limit, which is much lower on iOS than on the
+  // desktop, plus the RGBA buffer the pipeline has to hold (4 bytes/px).
+  function maxOutputPixels(){
+    let limit = 32e6;
+    const ua = navigator.userAgent || "";
+    const iOS = /iPad|iPhone|iPod/.test(ua) ||
+      (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
+    if(iOS) limit = 16e6;            // Safari caps canvas area well below desktop
+    if(navigator.deviceMemory && navigator.deviceMemory <= 4){
+      limit = Math.min(limit, 20e6);
+    }
+    return limit;
+  }
+
+  function formatMP(px){
+    return (px / 1e6).toFixed(px < 1e7 ? 1 : 0) + " MP";
+  }
+
+// ==QU-ENGINE-CORE-START==
+  // ---------------------------------------------------------------------
+  // QUCore — the image-quality engine. Pure math on {data, width, height}
+  // (RGBA Uint8ClampedArray), no DOM, no canvas, no network. Kept free of
+  // browser APIs on purpose so the numeric behaviour can be tested offline
+  // (see tools/core-test.js).
+  //
+  // Design rules this file follows:
+  //  * Everything is measured before anything is changed. No fixed
+  //    contrast/saturation/sharpen constants are applied to every photo.
+  //  * Sharpening and tone work on LUMA ONLY. Chroma (the R-Y/G-Y/B-Y
+  //    differences) is carried through untouched, so hue cannot rotate and
+  //    colours cannot go neon.
+  //  * Contrast is centred on the image's own mean luma, so the mean is
+  //    preserved by construction rather than drifting dark.
+  //  * Unsharp masking is noise-gated (small fluctuations are suppressed
+  //    instead of amplified) and overshoot-clamped to the local 3x3 range
+  //    (which is what prevents white/dark halos and ringing).
+  //  * Work is done in horizontal bands with overlap, so peak memory does
+  //    not scale with image size.
+  // ---------------------------------------------------------------------
+  var QUCore = (function(){
+    "use strict";
+
+    var LR = 0.299, LG = 0.587, LB = 0.114; // BT.601 luma, same as canvas
+
+    function clamp(v, lo, hi){ return v < lo ? lo : (v > hi ? hi : v); }
+
+    // ---------- fast separable box blur (sliding window, O(1)/px) ----------
+    function boxH(src, dst, w, h, r){
+      if(w <= 1){ dst.set(src); return; }
+      if(r > ((w - 1) >> 1)) r = (w - 1) >> 1;
+      if(r < 1){ dst.set(src); return; }
+      var inv = 1 / (r + r + 1);
+      for(var y = 0; y < h; y++){
+        var row = y * w, ti = row, li = row, ri = row + r;
+        var fv = src[row], lv = src[row + w - 1], val = (r + 1) * fv;
+        for(var j = 0; j < r; j++) val += src[row + j];
+        for(var j = 0; j <= r; j++){ val += src[ri++] - fv; dst[ti++] = val * inv; }
+        for(var j = r + 1; j < w - r; j++){ val += src[ri++] - src[li++]; dst[ti++] = val * inv; }
+        for(var j = w - r; j < w; j++){ val += lv - src[li++]; dst[ti++] = val * inv; }
+      }
+    }
+
+    function boxV(src, dst, w, h, r){
+      if(h <= 1){ dst.set(src); return; }
+      if(r > ((h - 1) >> 1)) r = (h - 1) >> 1;
+      if(r < 1){ dst.set(src); return; }
+      var inv = 1 / (r + r + 1);
+      for(var x = 0; x < w; x++){
+        var ti = x, li = x, ri = x + r * w;
+        var fv = src[x], lv = src[x + w * (h - 1)], val = (r + 1) * fv;
+        for(var j = 0; j < r; j++) val += src[x + j * w];
+        for(var j = 0; j <= r; j++){ val += src[ri] - fv; dst[ti] = val * inv; ri += w; ti += w; }
+        for(var j = r + 1; j < h - r; j++){ val += src[ri] - src[li]; dst[ti] = val * inv; li += w; ri += w; ti += w; }
+        for(var j = h - r; j < h; j++){ val += lv - src[li]; dst[ti] = val * inv; li += w; ti += w; }
+      }
+    }
+
+    // Three box passes ~= a gaussian. Returns a new Float32Array.
+    function blurPlane(src, w, h, r, scratch){
+      var a = Float32Array.from(src);
+      var b = scratch && scratch.length === src.length ? scratch : new Float32Array(src.length);
+      for(var p = 0; p < 3; p++){
+        boxH(a, b, w, h, r);
+        boxV(b, a, w, h, r);
+      }
+      return a;
+    }
+
+    // 3x3 local min / max, separable. Used to clamp sharpening overshoot to
+    // the range that actually exists in the neighbourhood -> no halos.
+    function minMax3(src, w, h, outMin, outMax){
+      var tmpMin = new Float32Array(src.length), tmpMax = new Float32Array(src.length);
+      var x, y, i, a, b, c;
+      for(y = 0; y < h; y++){
+        var row = y * w;
+        for(x = 0; x < w; x++){
+          i = row + x;
+          a = src[x > 0 ? i - 1 : i];
+          b = src[i];
+          c = src[x < w - 1 ? i + 1 : i];
+          tmpMin[i] = a < b ? (a < c ? a : c) : (b < c ? b : c);
+          tmpMax[i] = a > b ? (a > c ? a : c) : (b > c ? b : c);
+        }
+      }
+      for(y = 0; y < h; y++){
+        var row2 = y * w;
+        var up = y > 0 ? row2 - w : row2;
+        var dn = y < h - 1 ? row2 + w : row2;
+        for(x = 0; x < w; x++){
+          i = row2 + x;
+          a = tmpMin[up + x]; b = tmpMin[i]; c = tmpMin[dn + x];
+          outMin[i] = a < b ? (a < c ? a : c) : (b < c ? b : c);
+          a = tmpMax[up + x]; b = tmpMax[i]; c = tmpMax[dn + x];
+          outMax[i] = a > b ? (a > c ? a : c) : (b > c ? b : c);
+        }
+      }
+    }
+
+    // ---------- small helpers ----------
+    function makeImage(w, h){
+      return { data: new Uint8ClampedArray(w * h * 4), width: w, height: h };
+    }
+
+    // Box-average downsample. Used for the cheap global statistics and for
+    // the dry-run quality check, so neither costs a full-resolution pass.
+    function proxy(img, maxSide){
+      var w = img.width, h = img.height;
+      var f = Math.max(1, Math.ceil(Math.max(w, h) / maxSide));
+      if(f === 1) return img;
+      var nw = Math.max(1, Math.floor(w / f)), nh = Math.max(1, Math.floor(h / f));
+      var out = makeImage(nw, nh), d = img.data, o = out.data;
+      for(var y = 0; y < nh; y++){
+        for(var x = 0; x < nw; x++){
+          var r = 0, g = 0, b = 0, a = 0, c = 0;
+          for(var j = 0; j < f; j++){
+            var sy = y * f + j; if(sy >= h) break;
+            for(var i = 0; i < f; i++){
+              var sx = x * f + i; if(sx >= w) break;
+              var p = (sy * w + sx) * 4;
+              r += d[p]; g += d[p + 1]; b += d[p + 2]; a += d[p + 3]; c++;
+            }
+          }
+          var q = (y * nw + x) * 4;
+          o[q] = r / c; o[q + 1] = g / c; o[q + 2] = b / c; o[q + 3] = a / c;
+        }
+      }
+      return out;
+    }
+
+    function lumaOf(img, y0, y1){
+      var w = img.width, d = img.data;
+      var rows = y1 - y0, n = w * rows;
+      var Y = new Float32Array(n);
+      for(var i = 0, p = y0 * w * 4; i < n; i++, p += 4){
+        Y[i] = LR * d[p] + LG * d[p + 1] + LB * d[p + 2];
+      }
+      return Y;
+    }
+
+    // ---------- analysis ----------
+    // Global tone/colour statistics come from a downsampled proxy (cheap and
+    // stable). Noise, detail and JPEG blockiness are properties of the pixel
+    // grid itself, so those are sampled from native-resolution tiles —
+    // measuring them on a downsampled copy would average the noise away and
+    // report a cleaner image than the user actually has.
+    function globalStats(img){
+      var p = proxy(img, 220);
+      var d = p.data, n = p.width * p.height;
+      var sum = 0, sumSq = 0, chroma = 0;
+      for(var i = 0, q = 0; i < n; i++, q += 4){
+        var r = d[q], g = d[q + 1], b = d[q + 2];
+        var Y = LR * r + LG * g + LB * b;
+        sum += Y; sumSq += Y * Y;
+        var mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+        var mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+        chroma += mx - mn;
+      }
+      var mean = sum / n;
+      var varr = Math.max(0, sumSq / n - mean * mean);
+      return { meanY: mean, stdY: Math.sqrt(varr), meanChroma: chroma / n };
+    }
+
+    function percentile(arr, p){
+      if(!arr.length) return 0;
+      var c = Float64Array.from(arr).sort();
+      var idx = clamp(Math.round((c.length - 1) * p), 0, c.length - 1);
+      return c[idx];
+    }
+
+    // Per-tile measurements:
+    //  * sigma  - robust noise estimate (Immerkaer 3x3 laplacian response,
+    //             median-based so texture doesn't inflate it).
+    //  * q0/q1  - RMS high-frequency energy before and after one extra known
+    //             blur. Independent signal and noise add linearly in the
+    //             ENERGY domain, which is what makes the sharpness measure
+    //             below survive a noisy image; measuring the same thing with
+    //             mean absolute differences does not, and reports grainy
+    //             photos as razor sharp.
+    function tileMetrics(img, tx, ty, ts){
+      var w = img.width, h = img.height, d = img.data;
+      var tw = Math.min(ts, w - tx), th = Math.min(ts, h - ty);
+      if(tw < 8 || th < 8) return null;
+      var Y = new Float32Array(tw * th);
+      for(var y = 0; y < th; y++){
+        var sp = ((ty + y) * w + tx) * 4;
+        for(var x = 0; x < tw; x++, sp += 4){
+          Y[y * tw + x] = LR * d[sp] + LG * d[sp + 1] + LB * d[sp + 2];
+        }
+      }
+      var lap = [];
+      for(var y2 = 1; y2 < th - 1; y2++){
+        for(var x2 = 1; x2 < tw - 1; x2++){
+          var i = y2 * tw + x2;
+          var v = 4 * Y[i]
+            - 2 * (Y[i - 1] + Y[i + 1] + Y[i - tw] + Y[i + tw])
+            + (Y[i - tw - 1] + Y[i - tw + 1] + Y[i + tw - 1] + Y[i + tw + 1]);
+          lap.push(Math.abs(v));
+        }
+      }
+      var b1 = blurPlane(Y, tw, th, 1);
+      var b2 = blurPlane(b1, tw, th, 1);
+      var q0 = 0, q1 = 0;
+      for(var k = 0; k < Y.length; k++){
+        var d0 = Y[k] - b1[k], d1 = b1[k] - b2[k];
+        q0 += d0 * d0; q1 += d1 * d1;
+      }
+      // median |laplacian| / 4.047 estimates the gaussian sigma of the noise
+      // for the 3x3 mask used above (mask L2 norm 6, median|N(0,s)|=0.6745s).
+      // Verified against known added noise in tools/core-test.js.
+      return {
+        sigma: percentile(lap, 0.5) / 4.047,
+        q0: q0 / Y.length,
+        q1: q1 / Y.length
+      };
+    }
+
+    // JPEG/WebP block artefacts sit on the 8px grid. Comparing the average
+    // step across 8-aligned column boundaries with the average step across
+    // all other boundaries gives a cheap, real blockiness ratio.
+    function blockiness(img){
+      var w = img.width, h = img.height, d = img.data;
+      if(w < 24 || h < 8) return 1;
+      var rowStep = Math.max(1, Math.floor(h / 48));
+      var onSum = 0, onN = 0, offSum = 0, offN = 0;
+      for(var y = 0; y < h; y += rowStep){
+        var base = y * w * 4;
+        for(var x = 1; x < w; x++){
+          var p = base + x * 4, q = p - 4;
+          var dy = Math.abs((LR * d[p] + LG * d[p + 1] + LB * d[p + 2])
+                          - (LR * d[q] + LG * d[q + 1] + LB * d[q + 2]));
+          if(x % 8 === 0){ onSum += dy; onN++; } else { offSum += dy; offN++; }
+        }
+      }
+      if(!onN || !offN) return 1;
+      var off = offSum / offN;
+      if(off < 0.35) return 1; // essentially flat area, ratio is meaningless
+      return (onSum / onN) / off;
+    }
+
+    function analyze(img){
+      var g = globalStats(img);
+      var w = img.width, h = img.height;
+      var ts = 96;
+      var cols = clamp(Math.floor(w / ts), 1, 4), rows = clamp(Math.floor(h / ts), 1, 4);
+      var sigmas = [], q0s = [], q1s = [];
+      for(var ry = 0; ry < rows; ry++){
+        for(var rx = 0; rx < cols; rx++){
+          var tx = Math.floor((w - ts) * (cols === 1 ? 0.5 : rx / (cols - 1)));
+          var ty = Math.floor((h - ts) * (rows === 1 ? 0.5 : ry / (rows - 1)));
+          var m = tileMetrics(img, Math.max(0, tx), Math.max(0, ty), ts);
+          if(m){ sigmas.push(m.sigma); q0s.push(m.q0); q1s.push(m.q1); }
+        }
+      }
+      function avg(a){ return a.length ? a.reduce(function(x, y){ return x + y; }, 0) / a.length : 0; }
+      // The flattest tile carries the least texture, so its estimate is the
+      // closest thing to a true noise floor.
+      var noiseSigma = sigmas.length ? Math.min.apply(null, sigmas) : 0;
+      var q0 = avg(q0s), q1 = avg(q1s);
+
+      // Remove the noise contribution in the energy domain, then ask how
+      // much fine detail one extra small blur destroys. A well focused photo
+      // loses most of it (ratio ~0.72); a soft or out-of-focus one has
+      // little to lose (~0.3-0.45); an already-sharpened one sits above 0.8.
+      // Coefficients measured against fixtures with known added noise.
+      var s0 = Math.sqrt(Math.max(0.0004, q0 - noiseSigma * noiseSigma));
+      var s1 = Math.sqrt(Math.max(0.0001, q1 - 0.007 * noiseSigma * noiseSigma));
+      var sharpness = clamp(1 - s1 / s0, 0, 1);
+      var block = blockiness(img);
+
+      return {
+        width: w, height: h,
+        megapixels: (w * h) / 1e6,
+        meanY: g.meanY,
+        stdY: g.stdY,
+        meanChroma: g.meanChroma,
+        noiseSigma: noiseSigma,
+        sharpness: sharpness,
+        hfEnergy: Math.sqrt(q0),
+        blockiness: block,
+        isDark: g.meanY < 70,
+        isBright: g.meanY > 190,
+        isLowContrast: g.stdY < 24,
+        isGrayscale: g.meanChroma < 3.0,
+        isNoisy: noiseSigma > 3.0,
+        isCompressed: block > 1.25,
+        isAlreadySharp: sharpness > 0.78
+      };
+    }
+
+    // ---------- planning ----------
+    // Turns measurements into processing strength. This is the only place
+    // where "how hard should we push" is decided, and every term is tied to
+    // something that was actually measured.
+    var MODES = {
+      // gain      - overall sharpening strength multiplier
+      // med       - how much mid-scale (local contrast) sharpening is added
+      // overshoot - how far a pixel may exceed its local range, as a
+      //             fraction of that range (relative halo budget)
+      // overAbs   - hard ceiling on the same thing in absolute levels, which
+      //             is what keeps high-contrast edges clean: 10% of a
+      //             170-level edge would be a visible 17-level rim
+      // floor     - strength applied even to an already-sharp image
+      // gate      - noise gate, in multiples of the measured noise sigma
+      // mask      - how much flat areas are protected (lower = more
+      //             protection for skin, sky and sensor noise)
+      natural:  { gain: 0.45, med: 0.00, overshoot: 0.04, overAbs: 3,  floor: 0.14, contrastCap: 0.03, gate: 2.6, mask: 0.30 },
+      balanced: { gain: 0.85, med: 0.30, overshoot: 0.10, overAbs: 6,  floor: 0.22, contrastCap: 0.07, gate: 2.0, mask: 0.50 },
+      detail:   { gain: 1.20, med: 0.50, overshoot: 0.17, overAbs: 10, floor: 0.30, contrastCap: 0.09, gate: 1.7, mask: 0.75 }
+    };
+
+    var SHARP_TARGET = 0.72; // measured sharpness of a well-focused photo
+
+    function makePlan(m, mode){
+      var cfg = MODES[mode] || MODES.balanced;
+
+      // How much sharpening headroom the image has: 1 for a soft image,
+      // 0 for one that is already crisp.
+      var deficit = clamp((SHARP_TARGET - m.sharpness) / 0.32, 0, 1);
+      // An image that is already sharper than a good photo has probably been
+      // sharpened once already; stacking a second pass is what produces
+      // crunchy edges, so the floor drops away.
+      var floor = m.isAlreadySharp ? cfg.floor * 0.35 : cfg.floor;
+      var strength = floor + (1 - floor) * deficit;
+
+      // Noise and block artefacts are exactly what unsharp masking makes
+      // worse, so both cut the strength directly.
+      var noisePenalty = clamp(1 - (m.noiseSigma - 1.5) / 7.0, 0.25, 1);
+      var blockPenalty = m.blockiness > 1.25 ? clamp(1 - (m.blockiness - 1.25) * 0.5, 0.5, 1) : 1;
+
+      var base = strength * noisePenalty * blockPenalty;
+
+      var amountFine = clamp(base * cfg.gain, 0, 1.2);
+      var amountMed = clamp(base * cfg.med, 0, 0.6);
+      if(amountFine < 0.04) amountFine = 0;
+      if(amountMed < 0.04) amountMed = 0;
+
+      // Contrast: nothing at all unless the image measures as genuinely
+      // flat, and then only a small capped nudge. A normal photo has a luma
+      // standard deviation around 34-46; below ~24 it really is washed out.
+      var contrast = 1;
+      if(m.stdY < 24){
+        contrast = 1 + Math.min(cfg.contrastCap, (24 - m.stdY) / 24 * 0.30);
+      }
+      // Very dark or very bright images are left alone tonally: stretching
+      // them is what crushes shadows and blows highlights.
+      if(m.meanY < 45 || m.meanY > 205) contrast = 1;
+
+      // Saturation is never boosted for its own sake. The only adjustment is
+      // the one that keeps colour where it already was: expanding luma
+      // contrast without touching chroma would make the image read as more
+      // washed out than the original, so chroma is scaled by the same factor
+      // — preservation, not beautification. With contrast == 1 (the normal
+      // case) this is exactly 1.0 and colour is bit-for-bit untouched.
+      var saturation = contrast;
+
+      // Detail smaller than this is treated as noise and suppressed instead
+      // of amplified.
+      var gateT = Math.max(1.6, m.noiseSigma * cfg.gate);
+
+      var radiusMed = clamp(Math.round(Math.min(m.width, m.height) / 500), 2, 6);
+
+      return {
+        mode: mode,
+        amountFine: amountFine,
+        amountMed: amountMed,
+        radiusMed: radiusMed,
+        overshoot: cfg.overshoot,
+        overshootAbs: cfg.overAbs,
+        gateT: gateT,
+        flatMask: cfg.mask,
+        contrast: contrast,
+        saturation: saturation,
+        meanY: m.meanY,
+        isNoOp: amountFine === 0 && amountMed === 0 && contrast === 1 && saturation === 1
+      };
+    }
+
+    // ---------- the enhancement pass ----------
+    // Applies one band of rows in place. margin rows above/below are used for
+    // context only and are not written back.
+    function enhanceBand(img, plan, y0, y1, margin){
+      var w = img.width, h = img.height, d = img.data;
+      var by0 = Math.max(0, y0 - margin), by1 = Math.min(h, y1 + margin);
+      var bh = by1 - by0;
+      if(bh <= 0) return;
+
+      var Y = lumaOf(img, by0, by1);
+      var scratch = new Float32Array(Y.length);
+      var bFine = blurPlane(Y, w, bh, 1, scratch);
+      var bMed = plan.amountMed > 0 ? blurPlane(Y, w, bh, plan.radiusMed, scratch) : null;
+
+      var lmin = new Float32Array(Y.length), lmax = new Float32Array(Y.length);
+      minMax3(Y, w, bh, lmin, lmax);
+
+      var T2 = plan.gateT * plan.gateT;
+      var aF = plan.amountFine, aM = plan.amountMed;
+      var over = plan.overshoot, overAbs = plan.overshootAbs, c = plan.contrast, s = plan.saturation, mY = plan.meanY;
+      var flatMask = plan.flatMask;
+
+      for(var y = y0; y < y1; y++){
+        var li = (y - by0) * w;
+        var pi = y * w * 4;
+        for(var x = 0; x < w; x++, li++, pi += 4){
+          var y0v = Y[li];
+          var newY = y0v;
+
+          if(aF > 0 || aM > 0){
+            var add = 0;
+            if(aF > 0){
+              var dF = y0v - bFine[li];
+              add += aF * (dF * dF * dF) / (dF * dF + T2);
+            }
+            if(aM > 0){
+              var dM = y0v - bMed[li];
+              add += aM * (dM * dM * dM) / (dM * dM + T2);
+            }
+            // Local range tells us whether this is a real edge or a flat
+            // area. Flat areas (skin, sky, sensor noise) get far less
+            // sharpening, which is what stops noise boiling and plastic
+            // looking texture.
+            var range = lmax[li] - lmin[li];
+            var w8 = range / (range + 8);
+            add *= flatMask + (1 - flatMask) * w8;
+
+            newY = y0v + add;
+
+            // Overshoot clamp: the result may not leave the local
+            // neighbourhood range by more than a small fraction of it.
+            // This is the anti-halo / anti-ringing constraint.
+            var slack = Math.min(range * over, overAbs) + 0.75;
+            var lo = lmin[li] - slack, hi = lmax[li] + slack;
+            if(newY < lo) newY = lo; else if(newY > hi) newY = hi;
+          }
+
+          if(c !== 1) newY = (newY - mY) * c + mY;
+
+          var delta = newY - y0v;
+          var r = d[pi], g = d[pi + 1], b = d[pi + 2];
+
+          if(delta !== 0){ r += delta; g += delta; b += delta; }
+
+          if(s !== 1){
+            var ly = newY;
+            r = ly + s * (r - ly);
+            g = ly + s * (g - ly);
+            b = ly + s * (b - ly);
+          }
+
+          d[pi] = r; d[pi + 1] = g; d[pi + 2] = b; // Uint8ClampedArray clamps
+        }
+      }
+    }
+
+    // Synchronous whole-image apply (used by the tests and by small images).
+    function applyPlan(img, plan){
+      if(plan.isNoOp) return;
+      var margin = 3 * plan.radiusMed + 3;
+      var band = Math.max(64, Math.min(img.height, 512));
+      for(var y = 0; y < img.height; y += band){
+        enhanceBand(img, plan, y, Math.min(img.height, y + band), margin);
+      }
+    }
+
+    // ---------- verification ----------
+    function measure(img){
+      var p = proxy(img, 260);
+      var d = p.data, n = p.width * p.height;
+      var sum = 0, chroma = 0, hi = 0, lo = 0, sumSq = 0;
+      for(var i = 0, q = 0; i < n; i++, q += 4){
+        var r = d[q], g = d[q + 1], b = d[q + 2];
+        var Y = LR * r + LG * g + LB * b;
+        sum += Y; sumSq += Y * Y;
+        var mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+        var mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+        chroma += mx - mn;
+        if(mx >= 253) hi++;
+        if(mx <= 2) lo++;
+      }
+      var mean = sum / n;
+      return {
+        meanY: mean,
+        stdY: Math.sqrt(Math.max(0, sumSq / n - mean * mean)),
+        meanChroma: chroma / n,
+        clipHigh: hi / n,
+        clipLow: lo / n
+      };
+    }
+
+    // Restores mean luma with a gamma curve rather than a brightness offset:
+    // gamma keeps 0 at 0 and 255 at 255, so nothing is pushed off either end
+    // of the range and no detail is clipped away. Only ever used to undo a
+    // drift the pipeline itself introduced, and only within +/-10%.
+    function correctMeanLuma(img, targetMean, currentMean){
+      if(currentMean <= 1 || currentMean >= 254 || targetMean <= 1 || targetMean >= 254) return 1;
+      var gamma = Math.log(targetMean / 255) / Math.log(currentMean / 255);
+      gamma = clamp(gamma, 0.90, 1.10);
+      if(Math.abs(gamma - 1) < 0.002) return 1;
+      var lut = new Float32Array(256);
+      for(var i = 0; i < 256; i++) lut[i] = 255 * Math.pow(i / 255, gamma);
+      var d = img.data, n = d.length;
+      for(var p = 0; p < n; p += 4){
+        var Y = LR * d[p] + LG * d[p + 1] + LB * d[p + 2];
+        var yi = Y | 0;
+        var frac = Y - yi;
+        var nY = yi >= 255 ? lut[255] : lut[yi] * (1 - frac) + lut[yi + 1] * frac;
+        var delta = nY - Y;
+        d[p] += delta; d[p + 1] += delta; d[p + 2] += delta;
+      }
+      return gamma;
+    }
+
+    // Dry run on a small proxy: applies the exact same plan to a downsampled
+    // copy and reports what it would do to brightness, colour and clipping.
+    // Cheap enough to run every time, which means a bad plan is caught
+    // before it ever touches the full-resolution pixels.
+    function verifyPlan(img, plan){
+      var small = proxy(img, 320);
+      if(small === img){
+        small = { data: Uint8ClampedArray.from(img.data), width: img.width, height: img.height };
+      } else {
+        small = { data: Uint8ClampedArray.from(small.data), width: small.width, height: small.height };
+      }
+      var before = measure(small);
+      var scaled = {};
+      for(var k in plan) scaled[k] = plan[k];
+      // The proxy is smaller, so the mid-scale radius has to shrink with it.
+      scaled.radiusMed = clamp(Math.round(plan.radiusMed * small.width / img.width), 1, plan.radiusMed);
+      applyPlan(small, scaled);
+      var after = measure(small);
+      return {
+        before: before,
+        after: after,
+        lumaDrift: after.meanY - before.meanY,
+        chromaRatio: before.meanChroma > 0.5 ? after.meanChroma / before.meanChroma : 1,
+        clipHighDelta: after.clipHigh - before.clipHigh,
+        clipLowDelta: after.clipLow - before.clipLow
+      };
+    }
+
+    // Quality gate. Anything outside these bounds means the plan misbehaved
+    // on this particular image, and the caller softens or drops it rather
+    // than showing the user a damaged result.
+    var LIMITS = {
+      lumaDrift: 2.0,      // levels out of 255
+      chromaLow: 0.96,
+      chromaHigh: 1.10,
+      clipDelta: 0.004     // fraction of pixels newly clipped
+    };
+
+    function planIsSafe(v){
+      return Math.abs(v.lumaDrift) <= LIMITS.lumaDrift
+        && v.chromaRatio >= LIMITS.chromaLow
+        && v.chromaRatio <= LIMITS.chromaHigh
+        && v.clipHighDelta <= LIMITS.clipDelta
+        && v.clipLowDelta <= LIMITS.clipDelta;
+    }
+
+    // Halves every strength term. Used to retry a plan that failed the gate.
+    function softenPlan(plan){
+      var p = {};
+      for(var k in plan) p[k] = plan[k];
+      p.amountFine = plan.amountFine * 0.5;
+      p.amountMed = plan.amountMed * 0.5;
+      p.contrast = 1 + (plan.contrast - 1) * 0.4;
+      p.saturation = 1 + (plan.saturation - 1) * 0.4;
+      p.overshoot = plan.overshoot * 0.6;
+      p.overshootAbs = plan.overshootAbs * 0.6;
+      p.isNoOp = p.amountFine < 0.04 && p.amountMed < 0.04 && p.contrast === 1 && p.saturation === 1;
+      return p;
+    }
+
+    return {
+      analyze: analyze,
+      makePlan: makePlan,
+      applyPlan: applyPlan,
+      enhanceBand: enhanceBand,
+      measure: measure,
+      proxy: proxy,
+      verifyPlan: verifyPlan,
+      planIsSafe: planIsSafe,
+      softenPlan: softenPlan,
+      correctMeanLuma: correctMeanLuma,
+      blurPlane: blurPlane,
+      LIMITS: LIMITS,
+      MODES: MODES
+    };
+  })();
+// ==QU-ENGINE-CORE-END==
+
+  // ---------------------------------------------------------------------
+  // Local AI super-resolution (lazy, per-scale)
+  // ---------------------------------------------------------------------
+  // Versions are pinned, not floating. UpscalerJS's model packages declare a
+  // peer dependency of "~4.11.0" on TensorFlow.js, and tfjs has since moved
+  // to 4.22.x; loading @latest for both puts a model built against 4.11 on
+  // top of a runtime four minor versions ahead, which is a documented source
+  // of "registerOp is not a function"-class failures at model load time. The
+  // three versions below are the combination that the model packages
+  // themselves declare and that is used together in the wild.
+  const AI_VERSIONS = { tfjs: "4.11.0", upscaler: "1.0.0-beta.19", model: "1.0.0-beta.12" };
   const AI_CDN = {
-    tfjs: 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js',
-    model2x: 'https://cdn.jsdelivr.net/npm/@upscalerjs/esrgan-slim@latest/dist/umd/2x.min.js',
-    model4x: 'https://cdn.jsdelivr.net/npm/@upscalerjs/esrgan-slim@latest/dist/umd/4x.min.js',
-    upscaler: 'https://cdn.jsdelivr.net/npm/upscaler@latest/dist/browser/umd/upscaler.min.js',
+    tfjs: "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@" + AI_VERSIONS.tfjs + "/dist/tf.min.js",
+    upscaler: "https://cdn.jsdelivr.net/npm/upscaler@" + AI_VERSIONS.upscaler + "/dist/browser/umd/upscaler.min.js",
+    model: function(scale){
+      return "https://cdn.jsdelivr.net/npm/@upscalerjs/esrgan-slim@" + AI_VERSIONS.model +
+        "/dist/umd/" + scale + "x.min.js";
+    }
   };
-  const AI_LOAD_TIMEOUT_MS = 25000;
+  const MODEL_GLOBAL = { 2: "ESRGANSlim2x", 4: "ESRGANSlim4x" };
+  const AI_LOAD_TIMEOUT_MS = 30000;
 
   const aiEngine = {
-    scriptsPromise: null,  // resolves once all CDN scripts have loaded
-    backend: null,         // 'webgl' | 'cpu' | null (unavailable)
-    upscalers: {},         // { 2: UpscalerInstance, 4: UpscalerInstance }
+    scripts: {},     // url -> Promise, so nothing is fetched twice
+    backend: null,       // 'webgl' | 'cpu' | null
+    tensorOutput: null,  // null = untested, then true/false for this build
+    upscalers: {}        // scale -> Upscaler instance
   };
 
   function loadScript(src){
-    return new Promise((resolve, reject) => {
-      const el = document.createElement('script');
-      el.src = src;
-      el.async = true;
-      el.onload = () => resolve();
-      el.onerror = () => reject(new Error('Could not load ' + src));
-      document.head.appendChild(el);
-    });
+    if(!aiEngine.scripts[src]){
+      aiEngine.scripts[src] = new Promise((resolve, reject) => {
+        const el = document.createElement("script");
+        el.src = src;
+        el.async = true;
+        el.onload = () => resolve();
+        el.onerror = () => {
+          delete aiEngine.scripts[src];   // allow a retry on the next attempt
+          reject(new Error("Could not load " + src));
+        };
+        document.head.appendChild(el);
+      });
+    }
+    return aiEngine.scripts[src];
   }
 
   function withTimeout(promise, ms, label){
     return new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error((label || 'operation') + ' timed out')), ms);
+      const t = setTimeout(() => reject(new Error((label || "operation") + " timed out")), ms);
       promise.then(
         (v) => { clearTimeout(t); resolve(v); },
         (e) => { clearTimeout(t); reject(e); }
@@ -665,72 +1296,361 @@
     });
   }
 
-  // Downloads tf.js + the AI model scripts from a CDN, only the first time
-  // AI upscaling is actually attempted. Nothing is fetched on page load.
-  function ensureAIScriptsLoaded(){
-    if(!aiEngine.scriptsPromise){
-      aiEngine.scriptsPromise = withTimeout((async () => {
-        if(!window.tf) await loadScript(AI_CDN.tfjs);
-        if(!window.ESRGANSlim2x) await loadScript(AI_CDN.model2x);
-        if(!window.ESRGANSlim4x) await loadScript(AI_CDN.model4x);
-        if(!window.Upscaler) await loadScript(AI_CDN.upscaler);
-        if(!window.tf || !window.Upscaler || !window.ESRGANSlim2x || !window.ESRGANSlim4x){
-          throw new Error('AI engine scripts did not initialize');
-        }
-      })(), AI_LOAD_TIMEOUT_MS, 'Loading the AI engine');
-    }
-    return aiEngine.scriptsPromise;
+  // Loads ONLY what this upscale factor needs: the runtime, the one model
+  // for the requested scale, and the library. Choosing 2x never downloads
+  // the 4x weights.
+  function ensureAIScripts(scale){
+    return withTimeout((async () => {
+      if(!window.tf) await loadScript(AI_CDN.tfjs);
+      if(!window[MODEL_GLOBAL[scale]]) await loadScript(AI_CDN.model(scale));
+      if(!window.Upscaler) await loadScript(AI_CDN.upscaler);
+      if(!window.tf || !window.Upscaler || !window[MODEL_GLOBAL[scale]]){
+        throw new Error("AI engine did not initialize");
+      }
+    })(), AI_LOAD_TIMEOUT_MS, "Loading the AI model");
   }
 
-  // Picks the fastest backend that actually initializes on this device:
-  // WebGL (GPU) first, plain-JS CPU backend second. If neither works, AI is
-  // unavailable and the caller falls back to the non-AI upscaler.
+  // GPU first, plain-JS CPU second. If neither initializes, AI is genuinely
+  // unavailable on this device and the caller falls back.
   async function pickAIBackend(){
     try {
-      await window.tf.setBackend('webgl');
+      await window.tf.setBackend("webgl");
       await window.tf.ready();
-      if(window.tf.getBackend() === 'webgl') return 'webgl';
-    } catch(e){ /* fall through */ }
+      if(window.tf.getBackend() === "webgl") return "webgl";
+    } catch(e){ /* no WebGL here */ }
     try {
-      await window.tf.setBackend('cpu');
+      await window.tf.setBackend("cpu");
       await window.tf.ready();
-      if(window.tf.getBackend() === 'cpu') return 'cpu';
-    } catch(e){ /* fall through */ }
+      if(window.tf.getBackend() === "cpu") return "cpu";
+    } catch(e){ /* nothing usable */ }
     return null;
   }
 
-  function getUpscalerFor(scale){
+  function getUpscaler(scale){
     if(!aiEngine.upscalers[scale]){
-      const model = scale === 4 ? window.ESRGANSlim4x : window.ESRGANSlim2x;
-      aiEngine.upscalers[scale] = new window.Upscaler({ model });
+      aiEngine.upscalers[scale] = new window.Upscaler({ model: window[MODEL_GLOBAL[scale]] });
     }
     return aiEngine.upscalers[scale];
   }
 
-  function loadImage(src){
+  // Frees GPU-side model resources. Called when the user moves on, so a long
+  // session doesn't sit on tens of MB of WebGL textures.
+  function releaseAI(){
+    Object.keys(aiEngine.upscalers).forEach((k) => {
+      const u = aiEngine.upscalers[k];
+      try { if(u && typeof u.dispose === "function") u.dispose(); } catch(e){}
+      delete aiEngine.upscalers[k];
+    });
+  }
+
+  // Runs the model tiled, straight into a canvas. Asking UpscalerJS for a
+  // tensor and painting that avoids materialising a base64 data URL of the
+  // upscaled image, which for a 4x result is a string hundreds of megabytes
+  // long. If this build doesn't support tensor output, the base64 path is
+  // used instead rather than failing.
+  async function runAIUpscale(source, scale, outW, outH, onProgress){
+    const upscaler = getUpscaler(scale);
+    const opts = {
+      patchSize: 64,
+      padding: 4,
+      progress: (rate) => {
+        if(typeof rate === "number" && onProgress) onProgress(Math.max(0, Math.min(1, rate)));
+      }
+    };
+
+    let tensor = null;
+    if(aiEngine.tensorOutput !== false){
+      try {
+        tensor = await upscaler.upscale(source, Object.assign({ output: "tensor" }, opts));
+        aiEngine.tensorOutput = true;
+      } catch(e){
+        tensor = null;
+        aiEngine.tensorOutput = false;   // don't pay for this attempt again
+      }
+    }
+
+    if(tensor && tensor.shape){
+      const canvas = document.createElement("canvas");
+      canvas.width = tensor.shape[1];
+      canvas.height = tensor.shape[0];
+      try {
+        await window.tf.browser.toPixels(tensor, canvas);
+      } finally {
+        try { tensor.dispose(); } catch(e){}
+      }
+      return canvas;
+    }
+
+    const src = await upscaler.upscale(source, opts);
+    const img = await loadImageFromSrc(src);
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+    canvas.getContext("2d").drawImage(img, 0, 0);
+    return canvas;
+  }
+
+  function loadImageFromSrc(src){
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error('Could not decode AI output image'));
+      img.onerror = () => reject(new Error("Could not decode image"));
       img.src = src;
     });
   }
 
-  // Runs real local AI inference (tiled, so memory stays bounded on large
-  // images) and returns a data URL. Throws if AI genuinely can't run here.
-  async function runAIUpscale(img, scale, onProgress){
-    await ensureAIScriptsLoaded();
-    if(!aiEngine.backend) aiEngine.backend = await pickAIBackend();
-    if(!aiEngine.backend) throw new Error('no-ai-backend');
-    const upscaler = getUpscalerFor(scale);
-    const resultSrc = await upscaler.upscale(img, {
-      patchSize: 64,
-      padding: 4,
-      progress: (rate) => {
-        if(typeof rate === 'number' && onProgress) onProgress(rate);
-      },
+  // ---------------------------------------------------------------------
+  // Canvas helpers
+  // ---------------------------------------------------------------------
+  function makeCanvas(w, h){
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    return c;
+  }
+
+  // Repeated doubling beats one big jump: the browser's resampler works on a
+  // small neighbourhood, so scaling 4x in a single drawImage throws away
+  // detail that stepping 2x at a time keeps. Used for the 1x pass-through
+  // and whenever AI isn't available.
+  function steppedResize(source, outW, outH){
+    let curW = source.naturalWidth || source.width;
+    let curH = source.naturalHeight || source.height;
+    let cur = source;
+    while(curW * 2 <= outW && curH * 2 <= outH){
+      const next = makeCanvas(curW * 2, curH * 2);
+      const nctx = next.getContext("2d");
+      nctx.imageSmoothingEnabled = true;
+      nctx.imageSmoothingQuality = "high";
+      nctx.drawImage(cur, 0, 0, curW * 2, curH * 2);
+      cur = next; curW *= 2; curH *= 2;
+    }
+    if(curW === outW && curH === outH && cur !== source) return cur;
+    const out = makeCanvas(outW, outH);
+    const ctx = out.getContext("2d");
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(cur, 0, 0, outW, outH);
+    return out;
+  }
+
+  function nextFrame(){
+    return new Promise(r => (window.requestAnimationFrame
+      ? requestAnimationFrame(() => setTimeout(r, 0))
+      : setTimeout(r, 16)));
+  }
+
+  function canvasToBlob(canvas, type, quality){
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if(blob) resolve(blob); else reject(new Error("Encoding failed"));
+      }, type, quality);
     });
-    return resultSrc;
+  }
+
+  // The output format follows the input. PNG stays PNG (lossless, keeps
+  // transparency); JPEG and WebP are re-encoded at a high quality factor so
+  // a second generation of compression doesn't undo the work.
+  function encodingFor(type){
+    if(type === "image/png") return { type: "image/png", quality: undefined };
+    if(type === "image/webp") return { type: "image/webp", quality: 0.95 };
+    return { type: "image/jpeg", quality: 0.95 };
+  }
+
+  // ---------------------------------------------------------------------
+  // The pipeline
+  // ---------------------------------------------------------------------
+  //   analysis -> upscale (AI or stepped resample) -> re-analysis
+  //   -> dry-run quality check -> banded enhancement -> brightness
+  //   verification -> encode -> output validation
+  async function processImage(img, mode, scale, onStage){
+    const inW = img.naturalWidth, inH = img.naturalHeight;
+    const outW = Math.round(inW * scale), outH = Math.round(inH * scale);
+    const cap = maxOutputPixels();
+
+    if(outW * outH > cap){
+      const err = new Error("Output too large");
+      err.code = "too-large";
+      err.cap = cap;
+      throw err;
+    }
+
+    await nextFrame();
+    onStage("Reading image…", 0.02);
+
+    // Reference statistics from the untouched original. Measured on a small
+    // proxy — brightness, colour and clipping are all scale-independent, so
+    // there's no reason to hold a second full-resolution buffer for this.
+    const refCanvas = steppedResize(img, Math.max(1, Math.round(inW * Math.min(1, 320 / Math.max(inW, inH)))),
+                                         Math.max(1, Math.round(inH * Math.min(1, 320 / Math.max(inW, inH)))));
+    const refData = refCanvas.getContext("2d").getImageData(0, 0, refCanvas.width, refCanvas.height);
+    const refStats = QUCore.measure(refData);
+    const srcHasAlpha = hasAlpha(refData);
+
+    let engine = "canvas";
+    let aiAttemptedButFailed = false;
+    let aiNote = null;
+    let working = null;   // canvas at output size
+
+    if(scale > 1){
+      try {
+        onStage("Loading AI model…", 0.05);
+        await ensureAIScripts(scale);
+        if(!aiEngine.backend) aiEngine.backend = await pickAIBackend();
+        if(!aiEngine.backend) throw new Error("no-ai-backend");
+
+        if(aiEngine.backend === "cpu" && inW * inH > CPU_AI_MAX_PIXELS){
+          aiNote = "cpu-too-slow";
+          throw new Error("cpu-too-slow");
+        }
+
+        onStage(aiEngine.backend === "cpu" ? "Enhancing image on CPU — this takes longer…"
+                                           : "Enhancing image…", 0.1);
+        working = await runAIUpscale(img, scale, outW, outH, (rate) => {
+          onStage("Enhancing image…", 0.1 + rate * 0.55);
+        });
+        engine = aiEngine.backend === "webgl" ? "ai-webgl" : "ai-cpu";
+      } catch(err){
+        aiAttemptedButFailed = true;
+        working = null;
+        // A failed WebGL run can leave the backend unusable; forget it so the
+        // next attempt re-picks rather than failing the same way forever.
+        if(aiNote !== "cpu-too-slow") aiEngine.backend = null;
+      }
+    }
+
+    if(!working){
+      onStage(scale > 1 ? "Enhancing image…" : "Preparing image…", 0.2);
+      await nextFrame();
+      working = steppedResize(img, outW, outH);
+      engine = scale > 1 ? "canvas" : "canvas-1x";
+    }
+
+    // The model outputs exactly scale x scale, but a fallback path or a
+    // rounding difference must not change the promised dimensions.
+    if(working.width !== outW || working.height !== outH){
+      working = steppedResize(working, outW, outH);
+    }
+
+    // The super-resolution model works on RGB only, so transparency has to
+    // be carried across separately rather than silently dropped.
+    let alphaPlane = null;
+    if(srcHasAlpha){
+      onStage("Preserving transparency…", 0.66);
+      await nextFrame();
+      alphaPlane = upscaleAlpha(img, outW, outH);
+    }
+
+    onStage("Measuring result…", 0.68);
+    await nextFrame();
+
+    const ctx = working.getContext("2d");
+    const imageData = ctx.getImageData(0, 0, outW, outH);
+    if(alphaPlane) applyAlpha(imageData, alphaPlane);
+
+    // Analysis runs on what will actually be enhanced. After a successful AI
+    // pass that image is already detailed, so the measured sharpening
+    // headroom collapses on its own — there's no separate "AI mode" constant
+    // anywhere, and no fixed contrast/saturation is applied to anything.
+    const metrics = QUCore.analyze(imageData);
+    let plan = QUCore.makePlan(metrics, mode);
+
+    // Dry run on a small proxy before touching the real pixels.
+    let verdict = QUCore.verifyPlan(imageData, plan);
+    let softened = false, dropped = false;
+    if(!QUCore.planIsSafe(verdict)){
+      plan = QUCore.softenPlan(plan);
+      verdict = QUCore.verifyPlan(imageData, plan);
+      softened = true;
+      if(!QUCore.planIsSafe(verdict)) dropped = true;
+    }
+
+    if(!dropped && !plan.isNoOp){
+      const margin = 3 * plan.radiusMed + 3;
+      const rowsPerBand = Math.max(48, Math.min(outH, Math.ceil(2.5e6 / outW)));
+      for(let y = 0; y < outH; y += rowsPerBand){
+        QUCore.enhanceBand(imageData, plan, y, Math.min(outH, y + rowsPerBand), margin);
+        onStage("Enhancing image…", 0.7 + 0.22 * (y / outH));
+        await nextFrame();
+      }
+    }
+
+    // Verification on the finished pixels. If the pipeline moved average
+    // brightness at all, it's corrected with a gamma curve (which holds
+    // black at black and white at white) rather than a brightness offset,
+    // and only within a 10% bound.
+    let lumaFix = 1;
+    const outStats = QUCore.measure(imageData);
+    const drift = outStats.meanY - refStats.meanY;
+    if(!dropped && Math.abs(drift) > 1.2){
+      lumaFix = QUCore.correctMeanLuma(imageData, refStats.meanY, outStats.meanY);
+    }
+
+    onStage("Saving…", 0.94);
+    ctx.putImageData(imageData, 0, 0);
+    await nextFrame();
+
+    const enc = encodingFor(originalFile.type);
+    const blob = await canvasToBlob(working, enc.type, enc.quality);
+
+    // Output validation: something has to come back, at the promised size,
+    // in the promised format.
+    if(!blob || blob.size < 128) throw new Error("Empty output");
+    if(working.width !== outW || working.height !== outH) throw new Error("Dimension mismatch");
+
+    const finalStats = QUCore.measure(imageData);
+    onStage("Done", 1);
+
+    return {
+      blob: blob,
+      type: enc.type,
+      bytes: blob.size,
+      width: outW, height: outH,
+      inWidth: inW, inHeight: inH,
+      engine: engine,
+      aiAttemptedButFailed: aiAttemptedButFailed,
+      aiNote: aiNote,
+      plan: plan,
+      metrics: metrics,
+      softened: softened,
+      dropped: dropped,
+      lumaFix: lumaFix,
+      lumaDrift: finalStats.meanY - refStats.meanY,
+      chromaRatio: refStats.meanChroma > 0.5 ? finalStats.meanChroma / refStats.meanChroma : 1
+    };
+  }
+
+  function hasAlpha(imageData){
+    const d = imageData.data;
+    for(let p = 3; p < d.length; p += 4){
+      if(d[p] !== 255) return true;
+    }
+    return false;
+  }
+
+  // Resamples the alpha channel on its own so transparency survives the AI
+  // path. Alpha is a smooth mask, so plain high-quality resampling is the
+  // right tool for it.
+  function upscaleAlpha(img, outW, outH){
+    const inW = img.naturalWidth, inH = img.naturalHeight;
+    const src = makeCanvas(inW, inH);
+    src.getContext("2d").drawImage(img, 0, 0);
+    const sd = src.getContext("2d").getImageData(0, 0, inW, inH);
+    const mask = makeCanvas(inW, inH);
+    const mctx = mask.getContext("2d");
+    const md = mctx.createImageData(inW, inH);
+    for(let p = 0; p < sd.data.length; p += 4){
+      const a = sd.data[p + 3];
+      md.data[p] = a; md.data[p + 1] = a; md.data[p + 2] = a; md.data[p + 3] = 255;
+    }
+    mctx.putImageData(md, 0, 0);
+    const big = steppedResize(mask, outW, outH);
+    return big.getContext("2d").getImageData(0, 0, outW, outH);
+  }
+
+  function applyAlpha(imageData, alphaData){
+    const d = imageData.data, a = alphaData.data;
+    for(let p = 0; p < d.length; p += 4){
+      d[p + 3] = a[p];
+    }
   }
 
   // ---------- Elements ----------
@@ -738,7 +1658,6 @@
   const modeVideo = document.getElementById('mode-video');
   const videoNote = document.getElementById('video-note');
   const uploadZone = document.getElementById('upload-zone');
-  const uploadTitle = document.getElementById('upload-title');
   const fileInput = document.getElementById('file-input');
   const errorBox = document.getElementById('error-box');
   const uploadStage = document.getElementById('upload-stage');
@@ -748,6 +1667,7 @@
   const improveBtn = document.getElementById('improve-btn');
   const processingRow = document.getElementById('processing-row');
   const processingLabel = document.getElementById('processing-label');
+  const processingPct = document.getElementById('processing-pct');
   const changeFileBtn = document.getElementById('change-file-btn');
   const resultSection = document.getElementById('result');
   const compareBefore = document.getElementById('compare-before');
@@ -757,6 +1677,7 @@
   const downloadBtn = document.getElementById('download-btn');
   const anotherBtn = document.getElementById('another-btn');
   const engineBadge = document.getElementById('engine-badge');
+  const resultDetail = document.getElementById('result-detail');
 
   // ---------- Mode switching ----------
   function setMode(mode){
@@ -809,29 +1730,24 @@
       showError("This file is too large to process reliably on this device. Please use a photo under 20 MB.");
       return;
     }
-    const reader = new FileReader();
-    reader.onerror = () => {
+    // Object URLs instead of data URLs: the browser keeps the bytes it
+    // already has rather than building a base64 copy of the whole file.
+    if(originalUrl) URL.revokeObjectURL(originalUrl);
+    originalUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      if(img.naturalWidth > MAX_DIM || img.naturalHeight > MAX_DIM){
+        showError("This photo's dimensions are too large for this device. Please use an image with sides under " + MAX_DIM + "px.");
+        return;
+      }
+      originalFile = file;
+      originalImg = img;
+      openWorkspace(file, img);
+    };
+    img.onerror = () => {
       showError("We couldn't read this image. Please try another file.");
     };
-    reader.onload = () => {
-      const dataUrl = reader.result;
-      const img = new Image();
-      img.onload = () => {
-        if(img.naturalWidth > MAX_DIM || img.naturalHeight > MAX_DIM){
-          showError("This photo's dimensions are too large for this device. Please use an image with sides under " + MAX_DIM + "px.");
-          return;
-        }
-        originalFile = file;
-        originalImg = img;
-        originalDataUrl = dataUrl;
-        openWorkspace(file, img);
-      };
-      img.onerror = () => {
-        showError("We couldn't read this image. Please try another file.");
-      };
-      img.src = dataUrl;
-    };
-    reader.readAsDataURL(file);
+    img.src = originalUrl;
   }
 
   function formatBytes(bytes){
@@ -841,7 +1757,7 @@
   }
 
   function openWorkspace(file, img){
-    previewImg.src = originalDataUrl;
+    previewImg.src = originalUrl;
     const fmt = file.type.replace('image/','').toUpperCase();
     metaLine.innerHTML =
       '<span>' + img.naturalWidth + ' × ' + img.naturalHeight + ' px</span>' +
@@ -850,19 +1766,42 @@
     uploadStage.style.display = 'none';
     workspace.classList.add('show');
     resultSection.classList.remove('show');
+    updateScaleAvailability(img);
+  }
+
+  // Greys out an upscale factor the device can't actually deliver, instead
+  // of letting the user pick it and hit an error afterwards.
+  function updateScaleAvailability(img){
+    const cap = maxOutputPixels();
+    document.querySelectorAll('[data-scale]').forEach(btn => {
+      const s = parseInt(btn.getAttribute('data-scale'), 10);
+      const px = img.naturalWidth * s * img.naturalHeight * s;
+      const tooBig = px > cap;
+      btn.disabled = tooBig;
+      btn.title = tooBig ? 'Would produce ' + formatMP(px) + ' — above this device\u2019s safe limit of ' + formatMP(cap) : '';
+      if(tooBig && scaleFactor === s){
+        scaleFactor = 1;
+        document.querySelectorAll('[data-scale]').forEach(b => b.setAttribute('aria-pressed', b.getAttribute('data-scale') === '1'));
+      }
+    });
   }
 
   changeFileBtn.addEventListener('click', resetToUpload);
 
   function resetToUpload(){
-    originalDataUrl = null;
-    resultDataUrl = null;
-    originalFile = null; originalImg = null; resultBytes = 0;
+    if(originalUrl){ URL.revokeObjectURL(originalUrl); originalUrl = null; }
+    if(resultUrl){ URL.revokeObjectURL(resultUrl); resultUrl = null; }
+    resultBlob = null;
+    originalFile = null; originalImg = null;
+    previewImg.removeAttribute('src');
+    compareBefore.removeAttribute('src');
+    compareAfter.removeAttribute('src');
     fileInput.value = '';
     workspace.classList.remove('show');
     resultSection.classList.remove('show');
     uploadStage.style.display = '';
     engineBadge.style.display = 'none';
+    if(resultDetail) resultDetail.textContent = '';
     clearError();
   }
 
@@ -876,234 +1815,90 @@
   });
   document.querySelectorAll('[data-scale]').forEach(btn => {
     btn.addEventListener('click', () => {
+      if(btn.disabled) return;
       document.querySelectorAll('[data-scale]').forEach(b => b.setAttribute('aria-pressed', 'false'));
       btn.setAttribute('aria-pressed', 'true');
       scaleFactor = parseInt(btn.getAttribute('data-scale'), 10);
     });
   });
 
-  // ---------- Real image processing ----------
-  // Box blur approximating a gaussian, run 3x per pass for a smooth result.
-  function boxBlur1D(src, dst, w, h, r, horizontal){
-    const channels = 4;
-    if(horizontal){
-      for(let y = 0; y < h; y++){
-        let rowStart = y * w * channels;
-        for(let x = 0; x < w; x++){
-          let rSum=0,gSum=0,bSum=0,count=0;
-          for(let k = -r; k <= r; k++){
-            let xx = x + k;
-            if(xx < 0) xx = 0; else if(xx >= w) xx = w-1;
-            const idx = rowStart + xx*channels;
-            rSum += src[idx]; gSum += src[idx+1]; bSum += src[idx+2]; count++;
-          }
-          const outIdx = rowStart + x*channels;
-          dst[outIdx] = rSum/count; dst[outIdx+1] = gSum/count; dst[outIdx+2] = bSum/count;
-          dst[outIdx+3] = src[outIdx+3];
-        }
-      }
-    } else {
-      for(let x = 0; x < w; x++){
-        for(let y = 0; y < h; y++){
-          let rSum=0,gSum=0,bSum=0,count=0;
-          for(let k = -r; k <= r; k++){
-            let yy = y + k;
-            if(yy < 0) yy = 0; else if(yy >= h) yy = h-1;
-            const idx = (yy*w + x)*channels;
-            rSum += src[idx]; gSum += src[idx+1]; bSum += src[idx+2]; count++;
-          }
-          const outIdx = (y*w + x)*channels;
-          dst[outIdx] = rSum/count; dst[outIdx+1] = gSum/count; dst[outIdx+2] = bSum/count;
-          dst[outIdx+3] = src[outIdx+3];
-        }
-      }
-    }
-  }
-
-  function approxGaussianBlur(data, w, h, radius){
-    let a = Float32Array.from(data);
-    let b = new Float32Array(data.length);
-    for(let pass = 0; pass < 3; pass++){
-      boxBlur1D(a, b, w, h, radius, true);
-      boxBlur1D(b, a, w, h, radius, false);
-    }
-    return a;
-  }
-
-  function clamp255(v){ return v < 0 ? 0 : (v > 255 ? 255 : v); }
-
-  // Samples the image's own average luma instead of assuming a fixed
-  // mid-gray (128). Centering the contrast operation on the image's actual
-  // mean is what makes E[(v-mean)*contrast+mean] == mean — i.e. average
-  // brightness is preserved by construction, for any exposure. Using a fixed
-  // 128 instead (the old code) systematically darkens photos whose average
-  // brightness is below 128 and brightens ones above it, which is what
-  // caused the earlier "images got darker" bug. (Per-pixel clamping to the
-  // valid 0-255 range still means an already very dark or very bright photo
-  // can see a small, unavoidable edge-case shift — see Test 5/6.)
-  function computeMeanLuma(data){
-    let sum = 0, n = 0;
-    const stride = 4 * 31; // sample rather than scan every pixel; plenty stable for a mean
-    for(let i = 0; i < data.length; i += stride){
-      sum += 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
-      n++;
-    }
-    return n ? sum / n : 128;
-  }
-
-  function enhanceImageData(imageData, mode){
-    const { data, width, height } = imageData;
-    let amount, contrast, saturation, radius;
-    if(mode === 'strong'){
-      amount = 1.35; contrast = 1.14; saturation = 1.22;
-      radius = Math.max(1, Math.round(Math.min(width, height) / 400));
-    } else if(mode === 'ai-strong'){
-      // A real AI pass already reconstructed detail; this is a light
-      // touch-up only, kept small on purpose to avoid halos/ringing on top
-      // of AI-generated edges.
-      amount = 0.28; contrast = 1.04; saturation = 1.05;
-      radius = 1;
-    } else {
-      amount = 0.65; contrast = 1.05; saturation = 1.08;
-      radius = Math.max(1, Math.round(Math.min(width, height) / 400));
-    }
-
-    const blurred = approxGaussianBlur(data, width, height, radius);
-    const meanLuma = computeMeanLuma(data);
-
-    for(let i = 0; i < data.length; i += 4){
-      for(let c = 0; c < 3; c++){
-        const orig = data[i+c];
-        const blur = blurred[i+c];
-        let v = orig + amount * (orig - blur);
-        v = (v - meanLuma) * contrast + meanLuma;
-        data[i+c] = clamp255(v);
-      }
-      const r = data[i], g = data[i+1], b = data[i+2];
-      const gray = 0.299*r + 0.587*g + 0.114*b;
-      data[i]   = clamp255(gray + saturation * (r - gray));
-      data[i+1] = clamp255(gray + saturation * (g - gray));
-      data[i+2] = clamp255(gray + saturation * (b - gray));
-    }
-    return imageData;
-  }
-
-  function nextFrame(){ return new Promise(r => setTimeout(r, 20)); }
-
-  // Full fallback hierarchy:
-  //  scale===1        -> sharpening only, no AI model exists for that (canvas engine)
-  //  scale===2 or 4    -> try AI (WebGL, then CPU) -> else honest non-AI upscale
-  // Returns which engine actually ran so the UI can label it truthfully.
-  async function processImage(img, mode, scale, onStage){
-    const outW = Math.round(img.naturalWidth * scale);
-    const outH = Math.round(img.naturalHeight * scale);
-
-    if(outW * outH > MAX_OUTPUT_PIXELS){
-      const err = new Error('Output too large');
-      err.code = 'too-large';
-      throw err;
-    }
-
-    await nextFrame(); // let the "processing" UI paint before heavy work starts
-
-    let engine = null; // 'ai-webgl' | 'ai-cpu' | 'canvas'
-    let sourceForCanvas = img;
-    let aiFailed = false;
-
-    if(scale > 1){
-      try{
-        onStage('Loading AI model…');
-        await ensureAIScriptsLoaded();
-        if(!aiEngine.backend) aiEngine.backend = await pickAIBackend();
-        if(!aiEngine.backend) throw new Error('no-ai-backend');
-
-        onStage('Preparing image…');
-        await nextFrame();
-
-        onStage('AI processing…');
-        const aiSrc = await runAIUpscale(img, scale, (rate) => {
-          onStage('AI processing… ' + Math.round(Math.max(0, Math.min(1, rate)) * 100) + '%');
-        });
-
-        onStage('Reconstructing image…');
-        sourceForCanvas = await loadImage(aiSrc);
-        engine = aiEngine.backend === 'webgl' ? 'ai-webgl' : 'ai-cpu';
-      } catch(err){
-        aiFailed = true;
-        sourceForCanvas = img;
-      }
-    }
-
-    if(!engine){
-      onStage(scale > 1 ? 'AI unavailable — using high-quality upscale…' : 'Preparing image…');
-      await nextFrame();
-      engine = 'canvas';
-    }
-
-    const canvas = document.createElement('canvas');
-    canvas.width = outW; canvas.height = outH;
-    const ctx = canvas.getContext('2d');
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    // Draws into an exact outW x outH canvas regardless of engine, so the
-    // AI's tiled output — or the plain resample — always lands on the exact
-    // requested dimensions.
-    ctx.drawImage(sourceForCanvas, 0, 0, outW, outH);
-
-    onStage('Encoding…');
-    const imageData = ctx.getImageData(0, 0, outW, outH);
-
-    if(engine === 'canvas'){
-      enhanceImageData(imageData, mode); // full sharpening does all the enhancement work here
-    } else if(mode === 'strong'){
-      enhanceImageData(imageData, 'ai-strong'); // light touch-up only; AI already added real detail
-    }
-    ctx.putImageData(imageData, 0, 0);
-
-    const dataUrl = canvas.toDataURL(originalFile.type, 0.94);
-    const base64Length = dataUrl.length - (dataUrl.indexOf(',') + 1);
-    const approxBytes = Math.round(base64Length * 0.75);
-
-    onStage('Complete');
-    return { dataUrl, bytes: approxBytes, width: outW, height: outH, engine, aiAttemptedButFailed: aiFailed };
-  }
-
   const ENGINE_LABELS = {
-    'ai-webgl': { text: 'AI Super Resolution — GPU (WebGL)', cls: 'is-ai' },
-    'ai-cpu':   { text: 'AI Super Resolution — CPU', cls: 'is-ai' },
-    'canvas':   { text: 'High-Quality Upscale — Browser (non-AI)', cls: 'is-fallback' },
+    'ai-webgl':  { text: 'AI Super Resolution — GPU (WebGL)', cls: 'is-ai' },
+    'ai-cpu':    { text: 'AI Super Resolution — CPU', cls: 'is-ai' },
+    'canvas':    { text: 'High-Quality Browser Upscale', cls: 'is-fallback' },
+    'canvas-1x': { text: 'Local enhancement — original size', cls: 'is-fallback' }
   };
+
+  // Plain-language summary of what the pipeline decided to do. Honest about
+  // the case where the right answer was "almost nothing".
+  function describeResult(out){
+    const parts = [];
+    if(out.dropped){
+      parts.push('This photo measured well already, so only the resize was applied.');
+    } else if(out.plan.isNoOp){
+      parts.push('This photo measured as sharp and well exposed, so it was left as it is.');
+    } else {
+      const modeCfg = QUCore.MODES[out.plan.mode] || QUCore.MODES.balanced;
+      const strength = Math.round(Math.min(1, out.plan.amountFine / modeCfg.gain) * 100);
+      parts.push('Sharpening applied at ' + strength + '% of full strength, chosen from this photo\u2019s own detail and noise levels.');
+      if(out.plan.contrast > 1.001){
+        parts.push('Contrast raised by ' + Math.round((out.plan.contrast - 1) * 100) + '% (the image measured as flat).');
+      } else {
+        parts.push('Contrast and colour left unchanged.');
+      }
+    }
+    if(out.metrics && out.metrics.noiseSigma > 3){
+      parts.push('Noise was detected, so fine-detail enhancement was held back to avoid amplifying it.');
+    }
+    if(out.aiNote === 'cpu-too-slow'){
+      parts.push('AI upscaling was skipped because this device has no GPU acceleration and the image is large.');
+    }
+    return parts.join(' ');
+  }
 
   improveBtn.addEventListener('click', async () => {
     if(!originalImg || !originalFile) return;
     improveBtn.disabled = true;
     processingRow.classList.add('show');
-    processingLabel.textContent = 'Processing on your device…';
+    processingLabel.textContent = 'Enhancing image…';
+    if(processingPct) processingPct.textContent = '0%';
     clearError();
 
-    try{
-      const out = await processImage(originalImg, enhancement, scaleFactor, (label) => {
+    try {
+      const out = await processImage(originalImg, enhancement, scaleFactor, (label, pct) => {
         processingLabel.textContent = label;
+        if(processingPct && typeof pct === 'number'){
+          processingPct.textContent = Math.round(pct * 100) + '%';
+        }
       });
-      resultDataUrl = out.dataUrl;
-      resultBytes = out.bytes;
 
-      compareBefore.src = originalDataUrl;
-      compareAfter.src = resultDataUrl;
-      document.getElementById('result-sub').textContent =
-        'Drag the slider to compare. Output: ' + out.width + ' × ' + out.height + ' px, ' + formatBytes(resultBytes) + '.';
+      if(resultUrl) URL.revokeObjectURL(resultUrl);
+      resultBlob = out.blob;
+      resultUrl = URL.createObjectURL(out.blob);
+
+      compareBefore.src = originalUrl;
+      compareAfter.src = resultUrl;
+
+      document.getElementById('result-sub').innerHTML =
+        'Original <b>' + out.inWidth + ' × ' + out.inHeight + '</b>' +
+        ' → Enhanced <b>' + out.width + ' × ' + out.height + '</b>' +
+        ' · ' + formatBytes(out.bytes) + ' ' + out.type.replace('image/', '').toUpperCase();
 
       const label = ENGINE_LABELS[out.engine] || ENGINE_LABELS.canvas;
-      engineBadge.textContent = label.text + (out.aiAttemptedButFailed ? ' (AI unavailable this time)' : '');
+      engineBadge.textContent = label.text +
+        (out.aiAttemptedButFailed && out.engine === 'canvas' ? ' · AI unavailable on this device' : '');
       engineBadge.className = 'badge engine-badge ' + label.cls;
       engineBadge.style.display = '';
+
+      if(resultDetail) resultDetail.textContent = describeResult(out);
 
       resultSection.classList.add('show');
       resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
       resetSlider();
     } catch(err){
       if(err && err.code === 'too-large'){
-        showError('This image is too large for local processing on this device. Try a smaller image or a lower upscale factor.');
+        showError('This upscale would produce about ' + formatMP(originalImg.naturalWidth * scaleFactor * originalImg.naturalHeight * scaleFactor) +
+          ', above the ' + formatMP(err.cap) + ' this device can handle safely. Try 2× instead of 4×, or a smaller photo.');
       } else {
         showError("We couldn't finish processing this file. Your original file has not been changed. Please try another photo.");
       }
@@ -1118,6 +1913,7 @@
     pct = Math.max(0, Math.min(100, pct));
     afterWrap.style.width = pct + '%';
     handle.style.left = pct + '%';
+    handle.setAttribute('aria-valuenow', Math.round(pct));
   }
   function resetSlider(){ setSliderPct(50); }
 
@@ -1150,11 +1946,11 @@
 
   // ---------- Download / reset ----------
   downloadBtn.addEventListener('click', () => {
-    if(!resultDataUrl || !originalFile) return;
+    if(!resultUrl || !originalFile) return;
     const ext = originalFile.type === 'image/png' ? 'png' : (originalFile.type === 'image/webp' ? 'webp' : 'jpg');
     const baseName = originalFile.name.replace(/\.[^.]+$/, '');
     const a = document.createElement('a');
-    a.href = resultDataUrl;
+    a.href = resultUrl;
     a.download = baseName + '-qualityupgr.' + ext;
     document.body.appendChild(a);
     a.click();
@@ -1163,8 +1959,15 @@
 
   anotherBtn.addEventListener('click', () => {
     resultSection.classList.remove('show');
+    releaseAI();
     resetToUpload();
     document.getElementById('tool').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  window.addEventListener('pagehide', () => {
+    if(originalUrl) URL.revokeObjectURL(originalUrl);
+    if(resultUrl) URL.revokeObjectURL(resultUrl);
+    releaseAI();
   });
 
   // ---------- Early Access ----------
