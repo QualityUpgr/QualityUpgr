@@ -655,6 +655,111 @@
     lastError: null,
   };
 
+  // ---------- AI diagnostics (?debug=1) ----------
+  // This panel is intentionally disabled on normal visits. It exposes only
+  // runtime state needed to diagnose local AI loading/inference problems.
+  const AI_DEBUG = new URLSearchParams(window.location.search).get('debug') === '1';
+  let aiDebugPanel = null;
+  let aiDebugTimer = null;
+
+  function initAIDebugPanel(){
+    if(!AI_DEBUG || aiDebugPanel) return;
+
+    const style = document.createElement('style');
+    style.id = 'qualityupgr-ai-debug-style';
+    style.textContent = `
+      #qualityupgr-ai-debug{
+        position:fixed;left:12px;bottom:12px;z-index:2147483647;
+        width:min(520px,calc(100vw - 24px));max-height:58vh;overflow:auto;
+        box-sizing:border-box;padding:14px 16px;border:1px solid rgba(255,255,255,.16);
+        border-radius:12px;background:rgba(10,15,14,.96);color:#f5f7f6;
+        font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;
+        box-shadow:0 14px 40px rgba(0,0,0,.35);backdrop-filter:blur(8px);
+      }
+      #qualityupgr-ai-debug .qd-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:10px}
+      #qualityupgr-ai-debug .qd-title{font:700 13px/1.2 Inter,Arial,sans-serif}
+      #qualityupgr-ai-debug button{border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:#fff;border-radius:7px;padding:5px 9px;cursor:pointer}
+      #qualityupgr-ai-debug pre{white-space:pre-wrap;word-break:break-word;margin:0}
+      #qualityupgr-ai-debug .ok{color:#7ee787}
+      #qualityupgr-ai-debug .bad{color:#ff8b8b}
+      #qualityupgr-ai-debug .muted{color:#aeb8b5}
+    `;
+    document.head.appendChild(style);
+
+    aiDebugPanel = document.createElement('div');
+    aiDebugPanel.id = 'qualityupgr-ai-debug';
+    aiDebugPanel.innerHTML = `
+      <div class="qd-head">
+        <div class="qd-title">QualityUpgr · AI Diagnostics</div>
+        <button type="button" id="qd-refresh">Refresh</button>
+      </div>
+      <pre id="qd-body">Collecting runtime information…</pre>
+    `;
+    document.body.appendChild(aiDebugPanel);
+    document.getElementById('qd-refresh').addEventListener('click', updateAIDebugPanel);
+
+    updateAIDebugPanel();
+    aiDebugTimer = setInterval(updateAIDebugPanel, 500);
+  }
+
+  function aiDebugMark(value, ok, detail=''){
+    const mark = ok ? '✓' : '✗';
+    const cls = ok ? 'ok' : 'bad';
+    return `<span class="${cls}">${mark}</span> ${value}${detail ? ' — ' + detail : ''}`;
+  }
+
+  function updateAIDebugPanel(extraError=''){
+    if(!AI_DEBUG || !aiDebugPanel) return;
+
+    const tf = window.tf;
+    const scripts = Array.from(document.scripts);
+    const hasScript = (srcPart) => scripts.some(s => (s.src || '').includes(srcPart));
+
+    const selectedScale =
+      (typeof scaleFactor !== 'undefined' && scaleFactor) ? scaleFactor : 'not selected';
+
+    const backend = (() => {
+      try { return tf && typeof tf.getBackend === 'function' ? (tf.getBackend() || 'none') : 'none'; }
+      catch(_) { return 'error'; }
+    })();
+
+    const err = extraError || (aiEngine.lastError && (aiEngine.lastError.stack || aiEngine.lastError.message || String(aiEngine.lastError)));
+
+    const lines = [
+      'URL debug mode: ON',
+      '',
+      '--- Runtime ---',
+      aiDebugMark('TensorFlow.js loaded', !!tf, tf ? `version ${tf.version && tf.version.tfjs ? tf.version.tfjs : 'unknown'}` : ''),
+      aiDebugMark('UpscalerJS loaded', typeof window.Upscaler === 'function', hasScript('/upscaler.min.js') ? 'script present' : 'script not found'),
+      aiDebugMark('ESRGANSlim2x', typeof window.ESRGANSlim2x !== 'undefined', hasScript('/2x.min.js') ? 'script present' : 'script not found'),
+      aiDebugMark('ESRGANSlim4x', typeof window.ESRGANSlim4x !== 'undefined', hasScript('/4x.min.js') ? 'script present' : 'script not found'),
+      `Backend: ${backend}`,
+      `Selected scale: ${selectedScale}`,
+      '',
+      '--- Loader state ---',
+      `Runtime promise: ${aiEngine.scriptsPromise ? 'created' : 'not started'}`,
+      `2x model promise: ${aiEngine.modelPromises[2] ? 'created' : 'not started'}`,
+      `4x model promise: ${aiEngine.modelPromises[4] ? 'created' : 'not started'}`,
+      `AI upscalers: ${Object.keys(aiEngine.upscalers).length ? Object.keys(aiEngine.upscalers).join(', ') : 'none'}`,
+      '',
+      '--- CDN scripts ---',
+      `TensorFlow: ${hasScript('@tensorflow/tfjs@') ? 'present' : 'not present'}`,
+      `Upscaler: ${hasScript('upscaler@') ? 'present' : 'not present'}`,
+      `ESRGAN 2x: ${hasScript('@upscalerjs/esrgan-slim@') && hasScript('/2x.min.js') ? 'present' : 'not present'}`,
+      `ESRGAN 4x: ${hasScript('@upscalerjs/esrgan-slim@') && hasScript('/4x.min.js') ? 'present' : 'not present'}`,
+      '',
+      '--- Last error ---',
+      err ? String(err) : 'None',
+      '',
+      'Tip: run one enhancement while this panel is open, then screenshot the whole panel.'
+    ];
+
+    const body = aiDebugPanel.querySelector('#qd-body');
+    body.innerHTML = lines.join('\\n');
+  }
+
+  initAIDebugPanel();
+
   function loadScript(src){
     return new Promise((resolve, reject) => {
       // Reuse an already inserted script if a previous attempt created it.
