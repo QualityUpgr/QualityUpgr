@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>QualityUpgr — Improve Photo & Video Quality</title>
 <meta name="description" content="Improve your photos with real, local sharpening and upscaling. Nothing leaves your device.">
+<meta name="theme-color" content="#faf7f2">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 64 64%27%3E%3Crect width=%2764%27 height=%2764%27 rx=%2716%27 fill=%27%230f6e63%27/%3E%3Cpath d=%27M18 40V24c0-3.3 2.7-6 6-6h16c3.3 0 6 2.7 6 6v16%27 fill=%27none%27 stroke=%27white%27 stroke-width=%275%27 stroke-linecap=%27round%27/%3E%3Cpath d=%27M25 34l6-6 4 4 6-7%27 fill=%27none%27 stroke=%27white%27 stroke-width=%275%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27/%3E%3Cpath d=%27M42 21h5v5%27 fill=%27none%27 stroke=%27white%27 stroke-width=%275%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -79,6 +81,8 @@
   /* ---------- Header ---------- */
   header.site{padding:22px 0;}
   .site-header-inner{display:flex;align-items:center;justify-content:space-between;}
+  .brand{display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:inherit;}
+  .brand-mark{width:34px;height:34px;flex:none;display:block;}
   .wordmark{font-family:'Fraunces',serif;font-size:1.15rem;font-weight:600;letter-spacing:-0.01em;}
   .wordmark span{color:var(--accent);}
   nav.site a{font-size:0.9rem;color:var(--ink-soft);text-decoration:none;margin-left:24px;}
@@ -363,11 +367,19 @@
   .ea-form.show{display:block;}
 </style>
 </head>
-<body>
+<body id="top">
 
 <header class="site">
   <div class="wrap site-header-inner">
-    <div class="wordmark">Quality<span>Upgr</span></div>
+    <a class="brand" href="#top" aria-label="QualityUpgr home">
+      <svg class="brand-mark" viewBox="0 0 64 64" role="img" aria-hidden="true">
+        <rect width="64" height="64" rx="16" fill="var(--accent)"/>
+        <path d="M18 40V24c0-3.3 2.7-6 6-6h16c3.3 0 6 2.7 6 6v16" fill="none" stroke="white" stroke-width="5" stroke-linecap="round"/>
+        <path d="M25 34l6-6 4 4 6-7" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M42 21h5v5" fill="none" stroke="white" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="wordmark">Quality<span>Upgr</span></span>
+    </a>
     <nav class="site">
       <a href="#how-it-works">How it works</a>
       <a href="#pricing">Pricing</a>
