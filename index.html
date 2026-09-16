@@ -1209,7 +1209,7 @@
     if(scale > 1){
       try{
         onStage('Loading AI model…');
-        await ensureAIScriptsLoaded();
+        await ensureAIScriptsLoaded(scale);
         if(!aiEngine.backend) aiEngine.backend = await pickAIBackend();
         if(!aiEngine.backend) throw new Error('no-ai-backend');
 
