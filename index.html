@@ -1278,8 +1278,30 @@
     scripts: {},     // url -> Promise, so nothing is fetched twice
     backend: null,       // 'webgl' | 'cpu' | null
     tensorOutput: null,  // null = untested, then true/false for this build
-    upscalers: {}        // scale -> Upscaler instance
+    upscalers: {},        // scale -> Upscaler instance
+    debug: {
+      enabled: new URLSearchParams(location.search).get('debug') === '1',
+      lastError: null,
+      lastStage: null,
+      lastAttempt: null,
+      events: []
+    }
   };
+
+  function aiDebug(label, detail){
+    if(!aiEngine.debug.enabled) return;
+    const entry = { time: new Date().toISOString(), label: label, detail: detail };
+    aiEngine.debug.events.push(entry);
+    if(aiEngine.debug.events.length > 30) aiEngine.debug.events.shift();
+    console.log('[QualityUpgr AI]', label, detail || '');
+  }
+
+  function aiDebugError(label, err){
+    const detail = err && (err.stack || err.message) ? (err.stack || err.message) : String(err);
+    aiEngine.debug.lastError = detail;
+    aiDebug(label, detail);
+    console.error('[QualityUpgr AI]', label, err);
+  }
 
   function loadScript(src){
     if(!aiEngine.scripts[src]){
@@ -1287,10 +1309,15 @@
         const el = document.createElement("script");
         el.src = src;
         el.async = true;
-        el.onload = () => resolve();
+        el.onload = () => {
+          aiDebug('script loaded', src);
+          resolve();
+        };
         el.onerror = () => {
           delete aiEngine.scripts[src];   // allow a retry on the next attempt
-          reject(new Error("Could not load " + src));
+          const err = new Error("Could not load " + src);
+          aiDebugError('script load failed', err);
+          reject(err);
         };
         document.head.appendChild(el);
       });
@@ -1312,34 +1339,61 @@
   // for the requested scale, and the library. Choosing 2x never downloads
   // the 4x weights.
   function ensureAIScripts(scale){
+    aiDebug('ensure scripts', {
+      scale: scale,
+      tfjs: AI_CDN.tfjs,
+      model: AI_CDN.model(scale),
+      upscaler: AI_CDN.upscaler
+    });
     return withTimeout((async () => {
       if(!window.tf) await loadScript(AI_CDN.tfjs);
       if(!window[MODEL_GLOBAL[scale]]) await loadScript(AI_CDN.model(scale));
       if(!window.Upscaler) await loadScript(AI_CDN.upscaler);
-      if(!window.tf || !window.Upscaler || !window[MODEL_GLOBAL[scale]]){
-        throw new Error("AI engine did not initialize");
+      const state = {
+        tf: !!window.tf,
+        tfVersion: window.tf && window.tf.version ? window.tf.version : null,
+        model: !!window[MODEL_GLOBAL[scale]],
+        upscaler: !!window.Upscaler
+      };
+      aiDebug('scripts initialized', state);
+      if(!state.tf || !state.upscaler || !state.model){
+        throw new Error("AI engine did not initialize: " + JSON.stringify(state));
       }
-    })(), AI_LOAD_TIMEOUT_MS, "Loading the AI model");
+    })(), AI_LOAD_TIMEOUT_MS, "Loading the AI model").catch(err => {
+      aiDebugError('ensure scripts failed', err);
+      throw err;
+    });
   }
 
   // GPU first, plain-JS CPU second. If neither initializes, AI is genuinely
   // unavailable on this device and the caller falls back.
   async function pickAIBackend(){
     try {
+      aiDebug('trying WebGL backend');
       await window.tf.setBackend("webgl");
       await window.tf.ready();
-      if(window.tf.getBackend() === "webgl") return "webgl";
-    } catch(e){ /* no WebGL here */ }
+      const backend = window.tf.getBackend();
+      aiDebug('WebGL backend ready', backend);
+      if(backend === "webgl") return "webgl";
+    } catch(e){
+      aiDebugError('WebGL backend failed', e);
+    }
     try {
+      aiDebug('trying CPU backend');
       await window.tf.setBackend("cpu");
       await window.tf.ready();
-      if(window.tf.getBackend() === "cpu") return "cpu";
-    } catch(e){ /* nothing usable */ }
+      const backend = window.tf.getBackend();
+      aiDebug('CPU backend ready', backend);
+      if(backend === "cpu") return "cpu";
+    } catch(e){
+      aiDebugError('CPU backend failed', e);
+    }
     return null;
   }
 
   function getUpscaler(scale){
     if(!aiEngine.upscalers[scale]){
+      aiDebug('creating Upscaler instance', { scale: scale, modelGlobal: MODEL_GLOBAL[scale] });
       aiEngine.upscalers[scale] = new window.Upscaler({ model: window[MODEL_GLOBAL[scale]] });
     }
     return aiEngine.upscalers[scale];
@@ -1361,6 +1415,7 @@
   // long. If this build doesn't support tensor output, the base64 path is
   // used instead rather than failing.
   async function runAIUpscale(source, scale, outW, outH, onProgress){
+    aiDebug('inference starting', { scale: scale, outW: outW, outH: outH, backend: aiEngine.backend });
     const upscaler = getUpscaler(scale);
     const opts = {
       patchSize: 64,
@@ -1375,9 +1430,11 @@
       try {
         tensor = await upscaler.upscale(source, Object.assign({ output: "tensor" }, opts));
         aiEngine.tensorOutput = true;
+        aiDebug('tensor inference succeeded', tensor && tensor.shape ? tensor.shape : 'no shape');
       } catch(e){
         tensor = null;
         aiEngine.tensorOutput = false;   // don't pay for this attempt again
+        aiDebugError('tensor inference failed; trying image output', e);
       }
     }
 
@@ -1390,14 +1447,17 @@
       } finally {
         try { tensor.dispose(); } catch(e){}
       }
+      aiDebug('tensor converted to canvas', { width: canvas.width, height: canvas.height });
       return canvas;
     }
 
+    aiDebug('trying image-output inference');
     const src = await upscaler.upscale(source, opts);
     const img = await loadImageFromSrc(src);
     const canvas = document.createElement("canvas");
     canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
     canvas.getContext("2d").drawImage(img, 0, 0);
+    aiDebug('image-output inference succeeded', { width: canvas.width, height: canvas.height });
     return canvas;
   }
 
@@ -1504,7 +1564,15 @@
 
     if(scale > 1){
       try {
+        aiEngine.debug.lastAttempt = {
+          scale: scale,
+          inputWidth: inW,
+          inputHeight: inH,
+          startedAt: new Date().toISOString()
+        };
+        aiDebug('AI attempt started', aiEngine.debug.lastAttempt);
         onStage("Loading AI model…", 0.05);
+        aiEngine.debug.lastStage = "Loading AI model…";
         await ensureAIScripts(scale);
         if(!aiEngine.backend) aiEngine.backend = await pickAIBackend();
         if(!aiEngine.backend) throw new Error("no-ai-backend");
@@ -1514,8 +1582,10 @@
           throw new Error("cpu-too-slow");
         }
 
+        aiDebug('selected backend', aiEngine.backend);
         onStage(aiEngine.backend === "cpu" ? "Enhancing image on CPU — this takes longer…"
                                            : "Enhancing image…", 0.1);
+        aiEngine.debug.lastStage = "Inference";
         working = await runAIUpscale(img, scale, outW, outH, (rate) => {
           onStage("Enhancing image…", 0.1 + rate * 0.55);
         });
@@ -1523,6 +1593,7 @@
       } catch(err){
         aiAttemptedButFailed = true;
         working = null;
+        aiDebugError('AI attempt failed; using browser fallback', err);
         // A failed WebGL run can leave the backend unusable; forget it so the
         // next attempt re-picks rather than failing the same way forever.
         if(aiNote !== "cpu-too-slow") aiEngine.backend = null;
@@ -1663,6 +1734,51 @@
     for(let p = 0; p < d.length; p += 4){
       d[p + 3] = a[p];
     }
+  }
+
+  // ---------- Optional developer diagnostics ----------
+  // Add ?debug=1 to the URL to show a small diagnostics panel. Normal users
+  // never see it. This is intentionally read-only: it does not alter the
+  // enhancement pipeline or upload behavior.
+  if(aiEngine.debug.enabled){
+    const panel = document.createElement("div");
+    panel.id = "qualityupgr-ai-debug";
+    panel.style.cssText =
+      "position:fixed;left:12px;bottom:12px;z-index:99999;width:min(680px,calc(100vw - 24px));" +
+      "max-height:48vh;overflow:auto;padding:14px 16px;border:1px solid #aaa;border-radius:12px;" +
+      "background:#fff;color:#111;box-shadow:0 12px 36px rgba(0,0,0,.22);" +
+      "font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap";
+    panel.innerHTML = "<b>QualityUpgr AI diagnostics (?debug=1)</b><pre id='qualityupgr-ai-debug-pre' style='margin:8px 0 0;white-space:pre-wrap'>Waiting for AI attempt…</pre>";
+    document.body.appendChild(panel);
+
+    window.__qualityUpgrAIDebug = function(){
+      const c = document.createElement("canvas");
+      const gl = c.getContext("webgl") || c.getContext("experimental-webgl");
+      const tf = window.tf;
+      const lines = [
+        "WebGL context: " + (gl ? "AVAILABLE" : "UNAVAILABLE"),
+        "tfjs loaded: " + (!!tf),
+        "tfjs version: " + (tf && tf.version ? JSON.stringify(tf.version) : "n/a"),
+        "tf backend: " + (tf && typeof tf.getBackend === "function" ? tf.getBackend() : "n/a"),
+        "ESRGANSlim2x: " + (!!window.ESRGANSlim2x),
+        "ESRGANSlim4x: " + (!!window.ESRGANSlim4x),
+        "Upscaler: " + (!!window.Upscaler),
+        "selected backend: " + (aiEngine.backend || "none"),
+        "tensor output mode: " + String(aiEngine.tensorOutput),
+        "last stage: " + (aiEngine.debug.lastStage || "none"),
+        "last error:",
+        aiEngine.debug.lastError || "none",
+        "",
+        "Recent events:",
+        ...aiEngine.debug.events.slice(-10).map(e => e.label + " :: " + (typeof e.detail === "string" ? e.detail : JSON.stringify(e.detail)))
+      ];
+      const pre = document.getElementById("qualityupgr-ai-debug-pre");
+      if(pre) pre.textContent = lines.join("\\n");
+      return lines.join("\\n");
+    };
+
+    window.setInterval(window.__qualityUpgrAIDebug, 500);
+    window.__qualityUpgrAIDebug();
   }
 
   // ---------- Elements ----------
