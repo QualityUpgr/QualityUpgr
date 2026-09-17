@@ -365,15 +365,6 @@
   .ea-success p{color:var(--ink-soft);font-size:0.92rem;margin:0;}
   .ea-form{display:none;}
   .ea-form.show{display:block;}
-
-  /* Debug panel is opt-in: append ?debug=1 to the URL. */
-  #qu-debug{position:fixed;left:12px;bottom:12px;z-index:99999;width:min(520px,calc(100vw - 24px));max-height:46vh;overflow:auto;background:rgba(12,17,16,.96);color:#e9f3ef;border:1px solid rgba(255,255,255,.14);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.28);font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:12px;display:none;white-space:pre-wrap;}
-  #qu-debug.show{display:block;}
-  #qu-debug .qu-debug-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;font-family:Inter,system-ui,sans-serif;font-weight:700;font-size:13px;}
-  #qu-debug button{border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:inherit;border-radius:8px;padding:5px 8px;cursor:pointer;}
-  #qu-debug .ok{color:#a9e7bd;}
-  #qu-debug .bad{color:#ffb5ad;}
-  #qu-debug .muted{color:#aab7b2;}
 </style>
 </head>
 <body id="top">
@@ -500,6 +491,7 @@
           </div>
         </div>
         <p class="result-detail" id="result-detail"></p>
+        <div class="result-detail" id="ai-diagnosis" style="display:none; margin-top:12px;"></div>
         <div class="result-actions">
           <button class="cta" id="download-btn">Download</button>
           <button class="cta secondary" id="another-btn">Improve another file</button>
@@ -538,8 +530,8 @@
     <section class="info" id="privacy">
       <h2 class="reveal">Your files stay under your control.</h2>
       <div class="prose reveal-stagger">
-        <p>Photos you enhance with QualityUpgr are processed directly in your browser, on your own device. They are not uploaded to a QualityUpgr server for this local processing to happen, and this page makes no network request containing your image.</p>
-        <p>The first time you use 2× or 4× AI upscaling, your browser downloads a small AI model file (code and numeric weights, not related to your photo) from a public CDN so it can run locally; after that it's cached by your browser. Your photo itself is never part of that or any other request.</p>
+        <p>Your final enhancement is still performed in your browser. If AI diagnosis is enabled, QualityUpgr sends a reduced preview of your photo to Groq for analysis so it can identify the main quality problems and choose a safer processing plan. The original full-resolution file is not sent to Groq.</p>
+        <p>The Groq API key is kept server-side in Vercel and is never exposed in this page's JavaScript.</p>
         <p>Closing or reloading the tab clears everything — nothing is kept after your session.</p>
       </div>
     </section>
@@ -1271,29 +1263,13 @@
   // of "registerOp is not a function"-class failures at model load time. The
   // three versions below are the combination that the model packages
   // themselves declare and that is used together in the wild.
-  // Stable releases currently published by UpscalerJS. The old beta model
-  // URLs used here before are no longer the correct published artifact for
-  // the current package line; that is why the browser was reporting a model
-  // load failure even though TensorFlow.js itself loaded successfully.
-  // Keep these versions pinned so a future CDN update cannot silently change
-  // the runtime/model combination.
-  const AI_VERSIONS = { tfjs: "4.22.0", upscaler: "1.0.0", model: "1.0.0" };
+  const AI_VERSIONS = { tfjs: "4.11.0", upscaler: "1.0.0-beta.19", model: "1.0.0-beta.12" };
   const AI_CDN = {
-    tfjs: [
-      "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@" + AI_VERSIONS.tfjs + "/dist/tf.min.js",
-      "https://unpkg.com/@tensorflow/tfjs@" + AI_VERSIONS.tfjs + "/dist/tf.min.js"
-    ],
-    upscaler: [
-      "https://cdn.jsdelivr.net/npm/upscaler@" + AI_VERSIONS.upscaler + "/dist/browser/umd/upscaler.min.js",
-      "https://unpkg.com/upscaler@" + AI_VERSIONS.upscaler + "/dist/browser/umd/upscaler.min.js"
-    ],
+    tfjs: "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@" + AI_VERSIONS.tfjs + "/dist/tf.min.js",
+    upscaler: "https://cdn.jsdelivr.net/npm/upscaler@" + AI_VERSIONS.upscaler + "/dist/browser/umd/upscaler.min.js",
     model: function(scale){
-      return [
-        "https://cdn.jsdelivr.net/npm/@upscalerjs/esrgan-slim@" + AI_VERSIONS.model +
-          "/dist/umd/" + scale + "x.min.js",
-        "https://unpkg.com/@upscalerjs/esrgan-slim@" + AI_VERSIONS.model +
-          "/dist/umd/" + scale + "x.min.js"
-      ];
+      return "https://cdn.jsdelivr.net/npm/@upscalerjs/esrgan-slim@" + AI_VERSIONS.model +
+        "/dist/umd/" + scale + "x.min.js";
     }
   };
   const MODEL_GLOBAL = { 2: "ESRGANSlim2x", 4: "ESRGANSlim4x" };
@@ -1312,7 +1288,7 @@
         const el = document.createElement("script");
         el.src = src;
         el.async = true;
-        el.onload = () => resolve(src);
+        el.onload = () => resolve();
         el.onerror = () => {
           delete aiEngine.scripts[src];   // allow a retry on the next attempt
           reject(new Error("Could not load " + src));
@@ -1321,22 +1297,6 @@
       });
     }
     return aiEngine.scripts[src];
-  }
-
-  // Try the primary CDN first, then a second public CDN. A CDN failure should
-  // not make the AI engine look unavailable when the same pinned artifact is
-  // available elsewhere.
-  async function loadScriptFromCandidates(candidates){
-    let lastError = null;
-    for(const src of candidates){
-      try {
-        await loadScript(src);
-        return src;
-      } catch(e){
-        lastError = e;
-      }
-    }
-    throw lastError || new Error("Could not load AI script");
   }
 
   function withTimeout(promise, ms, label){
@@ -1352,11 +1312,11 @@
   // Loads ONLY what this upscale factor needs: the runtime, the one model
   // for the requested scale, and the library. Choosing 2x never downloads
   // the 4x weights.
-  async function ensureAIScripts(scale){
+  function ensureAIScripts(scale){
     return withTimeout((async () => {
-      if(!window.tf) await loadScriptFromCandidates(AI_CDN.tfjs);
-      if(!window[MODEL_GLOBAL[scale]]) await loadScriptFromCandidates(AI_CDN.model(scale));
-      if(!window.Upscaler) await loadScriptFromCandidates(AI_CDN.upscaler);
+      if(!window.tf) await loadScript(AI_CDN.tfjs);
+      if(!window[MODEL_GLOBAL[scale]]) await loadScript(AI_CDN.model(scale));
+      if(!window.Upscaler) await loadScript(AI_CDN.upscaler);
       if(!window.tf || !window.Upscaler || !window[MODEL_GLOBAL[scale]]){
         throw new Error("AI engine did not initialize");
       }
@@ -1909,6 +1869,72 @@
     return parts.join(' ');
   }
 
+  // ---------- Groq visual diagnosis ----------
+  // Groq is the diagnostic layer, not the pixel renderer. It inspects a small
+  // preview and returns a structured description of the problems it sees.
+  // The actual enhancement remains local in the browser.
+  const aiDiagnosisEl = document.getElementById('ai-diagnosis');
+  let latestDiagnosis = null;
+
+  function canvasPreviewDataUrl(img){
+    const maxSide = 1280;
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { alpha: false });
+    ctx.drawImage(img, 0, 0, w, h);
+    return c.toDataURL('image/jpeg', 0.82);
+  }
+
+  async function diagnoseWithGroq(img){
+    aiDiagnosisEl.style.display = 'block';
+    aiDiagnosisEl.textContent = 'AI diagnosis: analysing the image…';
+    latestDiagnosis = null;
+    try {
+      const preview = canvasPreviewDataUrl(img);
+      const resp = await fetch('/api/groq-analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: preview })
+      });
+      const data = await resp.json().catch(() => ({}));
+      if(!resp.ok || !data.success) throw new Error(data.message || 'Diagnosis failed');
+      latestDiagnosis = data.analysis || null;
+      const a = latestDiagnosis || {};
+      const problems = Array.isArray(a.problems) ? a.problems : [];
+      const rec = a.recommendation || 'Standard enhancement';
+      aiDiagnosisEl.innerHTML = '<b>AI diagnosis:</b> ' +
+        (problems.length ? problems.join(' · ') : 'No major quality problem detected.') +
+        '<br><b>Recommended treatment:</b> ' + rec;
+      return latestDiagnosis;
+    } catch(err){
+      // Diagnosis is optional. Processing must continue even if Groq is
+      // unavailable or the free-tier rate limit has been reached.
+      latestDiagnosis = null;
+      aiDiagnosisEl.textContent = 'AI diagnosis unavailable — local quality analysis will be used instead.';
+      return null;
+    }
+  }
+
+  function applyDiagnosisToControls(a){
+    if(!a) return;
+    const suggestedMode = a.mode === 'natural' || a.mode === 'balanced' || a.mode === 'detail' ? a.mode : null;
+    if(suggestedMode){
+      enhancement = suggestedMode;
+      document.querySelectorAll('[data-enh]').forEach(b => b.setAttribute('aria-pressed', b.getAttribute('data-enh') === suggestedMode ? 'true' : 'false'));
+    }
+    const suggestedScale = Number(a.scale);
+    if(suggestedScale === 1 || suggestedScale === 2 || suggestedScale === 4){
+      const btn = document.querySelector('[data-scale="' + suggestedScale + '"]');
+      if(btn && !btn.disabled){
+        scaleFactor = suggestedScale;
+        document.querySelectorAll('[data-scale]').forEach(b => b.setAttribute('aria-pressed', b.getAttribute('data-scale') === String(suggestedScale) ? 'true' : 'false'));
+      }
+    }
+  }
+
   improveBtn.addEventListener('click', async () => {
     if(!originalImg || !originalFile) return;
     improveBtn.disabled = true;
@@ -1918,6 +1944,8 @@
     clearError();
 
     try {
+      const diagnosis = await diagnoseWithGroq(originalImg);
+      applyDiagnosisToControls(diagnosis);
       const out = await processImage(originalImg, enhancement, scaleFactor, (label, pct) => {
         processingLabel.textContent = label;
         if(processingPct && typeof pct === 'number'){
@@ -1944,6 +1972,13 @@
       engineBadge.style.display = '';
 
       if(resultDetail) resultDetail.textContent = describeResult(out);
+      if(latestDiagnosis){
+        const a = latestDiagnosis;
+        const confidence = typeof a.confidence === 'number' ? ' (' + Math.round(a.confidence * 100) + '% confidence)' : '';
+        aiDiagnosisEl.innerHTML = '<b>AI diagnosis:</b> ' +
+          (Array.isArray(a.problems) && a.problems.length ? a.problems.join(' · ') : 'No major quality problem detected.') +
+          confidence + '<br><b>Recommended treatment:</b> ' + (a.recommendation || 'Standard enhancement');
+      }
 
       resultSection.classList.add('show');
       resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -2155,74 +2190,6 @@
   initScrollReveal();
 
 })();
-
-
-  // ---------------------------------------------------------------------
-  // Opt-in AI diagnostics (?debug=1)
-  // ---------------------------------------------------------------------
-  const QU_DEBUG = new URLSearchParams(location.search).get("debug") === "1";
-  let quDebugLastError = "";
-  let quDebugScale = null;
-  function quDebugEnsurePanel(){
-    if(!QU_DEBUG || document.getElementById("qu-debug")) return;
-    const panel = document.createElement("div");
-    panel.id = "qu-debug";
-    panel.innerHTML = '<div class="qu-debug-head"><span>QualityUpgr · AI Diagnostics</span><button type="button" id="qu-debug-refresh">Refresh</button></div><div id="qu-debug-body"></div>';
-    document.body.appendChild(panel);
-    panel.classList.add("show");
-    document.getElementById("qu-debug-refresh").addEventListener("click", quDebugRender);
-  }
-  function quDebugRender(){
-    if(!QU_DEBUG) return;
-    quDebugEnsurePanel();
-    const body = document.getElementById("qu-debug-body");
-    if(!body) return;
-    const tfOk = !!window.tf;
-    const upOk = !!window.Upscaler;
-    const model2 = !!window.ESRGANSlim2x;
-    const model4 = !!window.ESRGANSlim4x;
-    const backend = tfOk && typeof window.tf.getBackend === "function" ? window.tf.getBackend() : "not initialized";
-    const requested = quDebugScale ? quDebugScale + "×" : "none yet";
-    const modelForRequest = quDebugScale ? !!window[MODEL_GLOBAL[quDebugScale]] : false;
-    const lines = [
-      "URL debug mode: ON",
-      "",
-      "Runtime",
-      `  TensorFlow.js: ${tfOk ? "loaded — " + (window.tf.version?.tfjs || "version unknown") : "not loaded"}`,
-      `  UpscalerJS: ${upOk ? "loaded" : "not loaded"}`,
-      `  ESRGAN Slim 2×: ${model2 ? "loaded" : "not loaded"}`,
-      `  ESRGAN Slim 4×: ${model4 ? "loaded" : "not loaded"}`,
-      "",
-      "Loader state",
-      `  Requested scale: ${requested}`,
-      `  Requested model: ${quDebugScale ? (modelForRequest ? "present" : "missing") : "not selected"}`,
-      `  TensorFlow backend: ${backend}`,
-      `  Cached upscalers: ${Object.keys(aiEngine.upscalers || {}).join(", ") || "none"}`,
-      "",
-      "Pinned versions",
-      `  tfjs ${AI_VERSIONS.tfjs} · upscaler ${AI_VERSIONS.upscaler} · model ${AI_VERSIONS.model}`,
-      quDebugLastError ? `\nLast error\n  ${quDebugLastError}` : "",
-      "\nTip: run one enhancement while this panel is open, then refresh the panel."
-    ];
-    body.textContent = lines.join("\n");
-  }
-  if(QU_DEBUG){
-    window.addEventListener("load", () => { quDebugEnsurePanel(); quDebugRender(); });
-    const originalEnsureAIScripts = ensureAIScripts;
-    ensureAIScripts = async function(scale){
-      quDebugScale = scale;
-      quDebugRender();
-      try {
-        const result = await originalEnsureAIScripts(scale);
-        quDebugRender();
-        return result;
-      } catch(e){
-        quDebugLastError = e && e.message ? e.message : String(e);
-        quDebugRender();
-        throw e;
-      }
-    };
-  }
 </script>
 </body>
 </html>
